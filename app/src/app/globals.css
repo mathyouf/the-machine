@@ -1,0 +1,151 @@
+@import "tailwindcss";
+
+:root {
+  --background: #000000;
+  --foreground: #ededed;
+  --accent: #00ff88;
+  --accent-dim: #00ff8833;
+  --danger: #ff3333;
+  --danger-dim: #ff333333;
+  --dim-communal: #f59e0b;
+  --dim-aesthetic: #8b5cf6;
+  --dim-dark: #ef4444;
+  --dim-thrilling: #06b6d4;
+  --dim-cerebral: #22c55e;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-accent: var(--accent);
+  --color-accent-dim: var(--accent-dim);
+  --color-danger: var(--danger);
+  --color-danger-dim: var(--danger-dim);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-mono), "Courier New", monospace;
+}
+
+/* Scrollbar hidden for scroller view */
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.hide-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* CRT scanline effect for The Machine aesthetic */
+.crt-overlay {
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(0, 255, 136, 0.03) 0px,
+    rgba(0, 255, 136, 0.03) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+  z-index: 9999;
+}
+
+/* Sacred geometry background pattern */
+.sacred-geometry-bg {
+  background-image: radial-gradient(
+      circle at 25% 25%,
+      rgba(0, 255, 136, 0.05) 0%,
+      transparent 50%
+    ),
+    radial-gradient(
+      circle at 75% 75%,
+      rgba(139, 92, 246, 0.05) 0%,
+      transparent 50%
+    );
+}
+
+/* Text card animation */
+@keyframes slideInFromBottom {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes fadeOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.text-card-enter {
+  animation: slideInFromBottom 0.4s ease-out forwards;
+}
+
+.text-card-exit {
+  animation: fadeOut 0.6s ease-out forwards;
+}
+
+/* Danger zone flash */
+@keyframes dangerPulse {
+  0%,
+  100% {
+    box-shadow: inset 0 0 0 0 rgba(255, 51, 51, 0);
+  }
+  50% {
+    box-shadow: inset 0 0 30px 10px rgba(255, 51, 51, 0.3);
+  }
+}
+
+.danger-zone {
+  animation: dangerPulse 1s ease-in-out infinite;
+}
+
+/* UMAP dot animation */
+@keyframes umapDotAppear {
+  from {
+    transform: scale(0);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.umap-dot {
+  animation: umapDotAppear 0.3s ease-out forwards;
+}
+
+/* Glowing text */
+.glow-text {
+  text-shadow: 0 0 10px rgba(0, 255, 136, 0.5),
+    0 0 20px rgba(0, 255, 136, 0.3), 0 0 40px rgba(0, 255, 136, 0.1);
+}
+
+/* Pulse animation for score */
+@keyframes scorePulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+}
+
+.score-pulse {
+  animation: scorePulse 2s ease-in-out infinite;
+}
