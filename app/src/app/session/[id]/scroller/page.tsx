@@ -16,7 +16,7 @@ import { ensureAnonSession } from "@/lib/supabase/auth";
 export default function ScrollerPage() {
   const params = useParams<{ id: string }>();
   const sessionId = params?.id ?? "demo";
-  const [authReady, setAuthReady] = useState(false);
+  const [authReady, setAuthReady] = useState(!isSupabaseConfigured);
   const useSupabase = isSupabaseConfigured && authReady && isUuid(sessionId);
   const [videos, setVideos] = useState<Video[]>([]);
   const [sessionStartTime, setSessionStartTime] = useState<number | null>(null);
@@ -30,10 +30,7 @@ export default function ScrollerPage() {
   const videosRef = useRef<Video[]>([]);
 
   useEffect(() => {
-    if (!isSupabaseConfigured) {
-      setAuthReady(true);
-      return;
-    }
+    if (!isSupabaseConfigured) return;
     ensureAnonSession()
       .then(() => upsertUserProfile())
       .then(() => setAuthReady(true))
@@ -72,6 +69,14 @@ export default function ScrollerPage() {
     enabled: sessionActive && cameraAllowed,
   });
 
+  // Set session start time for demo mode
+  useEffect(() => {
+    if (!useSupabase && sessionStartTime === null) {
+      const t = setTimeout(() => setSessionStartTime(Date.now()), 0);
+      return () => clearTimeout(t);
+    }
+  }, [useSupabase, sessionStartTime]);
+
   // Simulate receiving text cards from optimizer (demo mode)
   useEffect(() => {
     if (useSupabase) return;
@@ -92,10 +97,7 @@ export default function ScrollerPage() {
   }, [sessionActive, useSupabase]);
 
   useEffect(() => {
-    if (!useSupabase) {
-      setSessionStartTime(Date.now());
-      return;
-    }
+    if (!useSupabase) return;
 
     const channel = createSessionChannel(sessionId);
     channelRef.current = channel;
@@ -127,10 +129,12 @@ export default function ScrollerPage() {
       }
     });
 
-    channel.broadcast({ type: "session_start", timestamp: Date.now() });
-    setSessionStartTime(Date.now());
+    const now = Date.now();
+    channel.broadcast({ type: "session_start", timestamp: now });
+    const t = setTimeout(() => setSessionStartTime(now), 0);
 
     return () => {
+      clearTimeout(t);
       unsubscribe();
       channel.unsubscribe();
     };

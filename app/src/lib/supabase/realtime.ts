@@ -10,7 +10,7 @@ export function createSessionChannel(sessionId: string) {
   if (!isSupabaseConfigured) {
     // Demo mode — no Supabase connection
     return {
-      subscribe: (callback: (event: RealtimeEvent) => void) => {
+      subscribe: (_callback: (event: RealtimeEvent) => void) => {
         console.log(`[Demo] Subscribed to session:${sessionId}`);
         return () => console.log(`[Demo] Unsubscribed from session:${sessionId}`);
       },

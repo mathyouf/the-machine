@@ -26,7 +26,7 @@ type RevealStep = "umap" | "text_cards" | "score" | "opt_in" | "call" | "debrief
 export default function RevealPage() {
   const params = useParams<{ id: string }>();
   const sessionId = params?.id ?? "demo";
-  const [authReady, setAuthReady] = useState(false);
+  const [authReady, setAuthReady] = useState(!isSupabaseConfigured);
   const useSupabase = isSupabaseConfigured && authReady && isUuid(sessionId);
   const [step, setStep] = useState<RevealStep>("umap");
   const [summary, setSummary] = useState(DEMO_SESSION_SUMMARY);
@@ -53,10 +53,7 @@ export default function RevealPage() {
   const handleSkip = () => advanceStep();
 
   useEffect(() => {
-    if (!isSupabaseConfigured) {
-      setAuthReady(true);
-      return;
-    }
+    if (!isSupabaseConfigured) return;
     ensureAnonSession()
       .then(() => upsertUserProfile())
       .then(() => setAuthReady(true))

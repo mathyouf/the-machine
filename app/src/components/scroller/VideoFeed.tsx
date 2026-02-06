@@ -29,10 +29,15 @@ export function VideoFeed({
   const [showDoneButton, setShowDoneButton] = useState(false);
   const [touchStart, setTouchStart] = useState<number | null>(null);
   const [touchStartTime, setTouchStartTime] = useState<number | null>(null);
-  const videoStartRef = useRef<number>(Date.now());
+  const videoStartRef = useRef<number>(0);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const currentVideo = videos[currentIndex];
+
+  // Initialize video start time on mount
+  useEffect(() => {
+    videoStartRef.current = Date.now();
+  }, []);
 
   // Show "Done for now" button after 5 minutes
   useEffect(() => {
@@ -46,13 +51,18 @@ export function VideoFeed({
   // Handle incoming text cards from optimizer
   useEffect(() => {
     if (pendingTextCard) {
-      setTextCardContent(pendingTextCard);
-      setShowTextCard(true);
-      const timer = setTimeout(() => {
+      const showTimer = setTimeout(() => {
+        setTextCardContent(pendingTextCard);
+        setShowTextCard(true);
+      }, 0);
+      const hideTimer = setTimeout(() => {
         setShowTextCard(false);
         onTextCardDismissed?.();
       }, 3000);
-      return () => clearTimeout(timer);
+      return () => {
+        clearTimeout(showTimer);
+        clearTimeout(hideTimer);
+      };
     }
   }, [pendingTextCard, onTextCardDismissed]);
 

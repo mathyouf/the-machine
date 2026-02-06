@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { RentfrowDimension, TrendIndicator, Video } from "@/lib/supabase/types";
 import { createSessionChannel } from "@/lib/supabase/realtime";
 import { fetchVideos, insertTextCard, upsertUserProfile } from "@/lib/supabase/data";
@@ -35,23 +35,24 @@ export function OptimizerDashboard({ sessionId }: OptimizerDashboardProps) {
   const [sessionTime, setSessionTime] = useState(0);
   const [scrollEvents, setScrollEvents] = useState<DemoScrollEvent[]>([]);
   const [currentDwell, setCurrentDwell] = useState(0);
-  const [dangerZone, setDangerZone] = useState(false);
+  // dangerZone derived below via useMemo
   const [textCards, setTextCards] = useState<{ content: string; time: number }[]>([]);
   const [selectedDimension, setSelectedDimension] = useState<RentfrowDimension>("communal");
   const [queuedVideos, setQueuedVideos] = useState<Video[]>([]);
   const [videos, setVideos] = useState<Video[]>([]);
   const [latestFrame, setLatestFrame] = useState<string | null>(null);
-  const [authReady, setAuthReady] = useState(false);
-  const sessionStartRef = useRef(Date.now());
+  const [authReady, setAuthReady] = useState(!isSupabaseConfigured);
+  const sessionStartRef = useRef(0);
   const channelRef = useRef<ReturnType<typeof createSessionChannel> | null>(null);
   const videoMapRef = useRef<Map<string, Video>>(new Map());
   const useSupabase = isSupabaseConfigured && authReady && isUuid(sessionId);
 
   useEffect(() => {
-    if (!isSupabaseConfigured) {
-      setAuthReady(true);
-      return;
-    }
+    sessionStartRef.current = Date.now();
+  }, []);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
     ensureAnonSession()
       .then(() => upsertUserProfile())
       .then(() => setAuthReady(true))
@@ -133,13 +134,12 @@ export function OptimizerDashboard({ sessionId }: OptimizerDashboardProps) {
   }, [sessionId, useSupabase]);
 
   // Check danger zone (3+ declining dwells)
-  useEffect(() => {
-    if (scrollEvents.length < 3) return;
+  const dangerZone = useMemo(() => {
+    if (scrollEvents.length < 3) return false;
     const last3 = scrollEvents.slice(-3);
-    const declining = last3.every(
+    return last3.every(
       (e, i) => i === 0 || e.dwellMs < last3[i - 1].dwellMs
     );
-    setDangerZone(declining);
   }, [scrollEvents]);
 
   // Dimension exploration counts
