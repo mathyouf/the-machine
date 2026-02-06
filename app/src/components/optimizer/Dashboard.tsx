@@ -1,8 +1,13 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Video, RentfrowDimension, TrendIndicator, ScrollEvent } from "@/lib/supabase/types";
-import { DEMO_VIDEOS, getVideosByDimension, DIMENSION_LABELS } from "@/lib/demo-data";
+import { RentfrowDimension, TrendIndicator, Video } from "@/lib/supabase/types";
+import { createSessionChannel } from "@/lib/supabase/realtime";
+import { fetchVideos, insertTextCard, upsertUserProfile } from "@/lib/supabase/data";
+import { isSupabaseConfigured } from "@/lib/supabase/client";
+import { isUuid } from "@/lib/supabase/utils";
+import { getPrimaryDimension } from "@/lib/video-utils";
+import { ensureAnonSession } from "@/lib/supabase/auth";
 import { FaceFeedPanel } from "./FaceFeed";
 import { DimensionMap } from "./DimensionMap";
 import { VideoPickerPanel } from "./VideoPickerPanel";
@@ -22,7 +27,11 @@ interface DemoScrollEvent {
   timestamp: number;
 }
 
-export function OptimizerDashboard() {
+interface OptimizerDashboardProps {
+  sessionId: string;
+}
+
+export function OptimizerDashboard({ sessionId }: OptimizerDashboardProps) {
   const [sessionTime, setSessionTime] = useState(0);
   const [scrollEvents, setScrollEvents] = useState<DemoScrollEvent[]>([]);
   const [currentDwell, setCurrentDwell] = useState(0);
@@ -30,7 +39,32 @@ export function OptimizerDashboard() {
   const [textCards, setTextCards] = useState<{ content: string; time: number }[]>([]);
   const [selectedDimension, setSelectedDimension] = useState<RentfrowDimension>("communal");
   const [queuedVideos, setQueuedVideos] = useState<Video[]>([]);
+  const [videos, setVideos] = useState<Video[]>([]);
+  const [latestFrame, setLatestFrame] = useState<string | null>(null);
+  const [authReady, setAuthReady] = useState(false);
   const sessionStartRef = useRef(Date.now());
+  const channelRef = useRef<ReturnType<typeof createSessionChannel> | null>(null);
+  const videoMapRef = useRef<Map<string, Video>>(new Map());
+  const useSupabase = isSupabaseConfigured && authReady && isUuid(sessionId);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) {
+      setAuthReady(true);
+      return;
+    }
+    ensureAnonSession()
+      .then(() => upsertUserProfile())
+      .then(() => setAuthReady(true))
+      .catch(() => setAuthReady(false));
+  }, []);
+
+  useEffect(() => {
+    fetchVideos({ fallbackToDemo: !useSupabase }).then(setVideos);
+  }, [useSupabase]);
+
+  useEffect(() => {
+    videoMapRef.current = new Map(videos.map((v) => [v.id, v]));
+  }, [videos]);
 
   // Simulate session timer
   useEffect(() => {
@@ -42,6 +76,7 @@ export function OptimizerDashboard() {
 
   // Simulate incoming scroll events for demo
   useEffect(() => {
+    if (useSupabase) return;
     const dims: RentfrowDimension[] = ["communal", "aesthetic", "dark", "thrilling", "cerebral"];
     const interval = setInterval(() => {
       const dim = dims[Math.floor(Math.random() * dims.length)];
@@ -57,7 +92,45 @@ export function OptimizerDashboard() {
       setCurrentDwell(dwell);
     }, 4000);
     return () => clearInterval(interval);
-  }, []);
+  }, [useSupabase]);
+
+  useEffect(() => {
+    if (!useSupabase) return;
+
+    const channel = createSessionChannel(sessionId);
+    channelRef.current = channel;
+
+    const unsubscribe = channel.subscribe((event) => {
+      if (event.type === "scroll_event") {
+        const video = videoMapRef.current.get(event.video_id);
+        const dimension = video ? getPrimaryDimension(video) : "communal";
+        setScrollEvents((prev) => [
+          ...prev,
+          {
+            videoId: event.video_id,
+            dwellMs: event.dwell_ms,
+            dimension,
+            queuedBy: event.queued_by,
+            timestamp: event.timestamp_ms,
+          },
+        ]);
+        setCurrentDwell(event.dwell_ms);
+      }
+
+      if (event.type === "camera_frame") {
+        setLatestFrame(event.frame);
+      }
+
+      if (event.type === "session_start") {
+        sessionStartRef.current = event.timestamp;
+      }
+    });
+
+    return () => {
+      unsubscribe();
+      channel.unsubscribe();
+    };
+  }, [sessionId, useSupabase]);
 
   // Check danger zone (3+ declining dwells)
   useEffect(() => {
@@ -145,10 +218,24 @@ export function OptimizerDashboard() {
 
   const handleQueueVideo = (video: Video) => {
     setQueuedVideos((prev) => [...prev, video]);
+    channelRef.current?.broadcast({ type: "queue_video", video_id: video.id });
   };
 
   const handleSendTextCard = (content: string) => {
     setTextCards((prev) => [...prev, { content, time: sessionTime }]);
+    if (useSupabase) {
+      const sentAtMs = sessionTime * 1000;
+      channelRef.current?.broadcast({
+        type: "text_card",
+        content,
+        sent_at_ms: sentAtMs,
+      });
+      insertTextCard({
+        session_id: sessionId,
+        content,
+        sent_at_ms: sentAtMs,
+      });
+    }
   };
 
   const formatTime = (s: number) => {
@@ -198,7 +285,7 @@ export function OptimizerDashboard() {
       <div className="grid grid-cols-12 gap-4">
         {/* Left Column: Face + Dwell + Text Cards */}
         <div className="col-span-12 lg:col-span-3 space-y-4">
-          <FaceFeedPanel />
+          <FaceFeedPanel frame={latestFrame} />
           <DwellIndicator
             currentDwell={currentDwell}
             avgDwell={avgDwell}
@@ -221,6 +308,7 @@ export function OptimizerDashboard() {
             onSelectDimension={setSelectedDimension}
             onQueueVideo={handleQueueVideo}
             queuedCount={queuedVideos.length}
+            videos={videos}
           />
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

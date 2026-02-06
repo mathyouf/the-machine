@@ -2,37 +2,32 @@
 
 import { useState } from "react";
 import { Video, RentfrowDimension } from "@/lib/supabase/types";
-import { getVideosByDimension, DIMENSION_LABELS } from "@/lib/demo-data";
+import { DIMENSION_LABELS } from "@/lib/demo-data";
+import { DIMENSIONS, getVideosByDimension } from "@/lib/video-utils";
 
 interface VideoPickerPanelProps {
   selectedDimension: RentfrowDimension;
   onSelectDimension: (dim: RentfrowDimension) => void;
   onQueueVideo: (video: Video) => void;
   queuedCount: number;
+  videos: Video[];
 }
-
-const DIMENSIONS: RentfrowDimension[] = [
-  "communal",
-  "aesthetic",
-  "dark",
-  "thrilling",
-  "cerebral",
-];
 
 export function VideoPickerPanel({
   selectedDimension,
   onSelectDimension,
   onQueueVideo,
   queuedCount,
+  videos,
 }: VideoPickerPanelProps) {
   const [selectedVideo, setSelectedVideo] = useState<Video | null>(null);
-  const videos = getVideosByDimension(selectedDimension);
+  const videosByDim = getVideosByDimension(videos, selectedDimension);
   const dimInfo = DIMENSION_LABELS[selectedDimension];
 
   const handleQueueRandom = () => {
     // Pick from least-explored dimension (in demo, just random)
     const randomDim = DIMENSIONS[Math.floor(Math.random() * DIMENSIONS.length)];
-    const pool = getVideosByDimension(randomDim);
+    const pool = getVideosByDimension(videos, randomDim);
     if (pool.length > 0) {
       onQueueVideo(pool[Math.floor(Math.random() * pool.length)]);
     }
@@ -71,7 +66,7 @@ export function VideoPickerPanel({
 
         {/* Video grid */}
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 mb-4">
-          {videos.map((video) => (
+          {videosByDim.map((video) => (
             <button
               key={video.id}
               onClick={() => setSelectedVideo(video)}

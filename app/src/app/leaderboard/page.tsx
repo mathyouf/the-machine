@@ -1,7 +1,10 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { LeaderboardEntry } from "@/lib/supabase/types";
+import { fetchLeaderboard } from "@/lib/supabase/data";
+import { isSupabaseConfigured } from "@/lib/supabase/client";
 
 // Demo leaderboard data
 const DEMO_LEADERBOARD: LeaderboardEntry[] = [
@@ -80,6 +83,15 @@ const DEMO_LEADERBOARD: LeaderboardEntry[] = [
 ];
 
 export default function LeaderboardPage() {
+  const [entries, setEntries] = useState<LeaderboardEntry[]>(DEMO_LEADERBOARD);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+    fetchLeaderboard().then((data) => {
+      if (data.length > 0) setEntries(data);
+    });
+  }, []);
+
   const formatTime = (s: number) => {
     const m = Math.floor(s / 60);
     const sec = Math.floor(s % 60);
@@ -120,7 +132,7 @@ export default function LeaderboardPage() {
           </div>
 
           {/* Rows */}
-          {DEMO_LEADERBOARD.map((entry, i) => (
+          {entries.map((entry, i) => (
             <div
               key={entry.user_id}
               className={`grid grid-cols-12 gap-2 px-4 py-3 border-b border-gray-900 hover:bg-accent/5 transition-colors ${

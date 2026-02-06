@@ -278,7 +278,7 @@ export default function LandingPage() {
           stranger.
         </p>
         <Link
-          href="/session/demo/lobby"
+          href="/session/new/lobby"
           className="inline-block px-12 py-4 bg-accent text-black font-bold tracking-widest text-lg hover:bg-accent/80 transition-all"
         >
           JOIN THE NEXT SESSION

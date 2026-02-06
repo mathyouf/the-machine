@@ -1,16 +1,36 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
+import { useParams } from "next/navigation";
 import { UmapReveal } from "@/components/reveal/UmapReveal";
 import { TextCardReplay } from "@/components/reveal/TextCardReplay";
 import { ScoreReveal } from "@/components/reveal/ScoreReveal";
 import { MutualOptIn } from "@/components/reveal/MutualOptIn";
 import { DEMO_SESSION_SUMMARY, DEMO_TEXT_CARDS } from "@/lib/demo-data";
+import {
+  fetchScrollEvents,
+  fetchSessionSummary,
+  fetchTextCards,
+  fetchVideos,
+  insertSessionSummary,
+  upsertUserProfile,
+} from "@/lib/supabase/data";
+import { isSupabaseConfigured } from "@/lib/supabase/client";
+import { isUuid } from "@/lib/supabase/utils";
+import { buildSessionSummary } from "@/lib/supabase/summary";
+import { Video } from "@/lib/supabase/types";
+import { ensureAnonSession } from "@/lib/supabase/auth";
 
 type RevealStep = "umap" | "text_cards" | "score" | "opt_in" | "call" | "debrief";
 
 export default function RevealPage() {
+  const params = useParams<{ id: string }>();
+  const sessionId = params?.id ?? "demo";
+  const [authReady, setAuthReady] = useState(false);
+  const useSupabase = isSupabaseConfigured && authReady && isUuid(sessionId);
   const [step, setStep] = useState<RevealStep>("umap");
+  const [summary, setSummary] = useState(DEMO_SESSION_SUMMARY);
+  const [cards, setCards] = useState(DEMO_TEXT_CARDS);
 
   const advanceStep = useCallback(() => {
     setStep((prev) => {
@@ -31,6 +51,51 @@ export default function RevealPage() {
 
   // Skip button for demo
   const handleSkip = () => advanceStep();
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) {
+      setAuthReady(true);
+      return;
+    }
+    ensureAnonSession()
+      .then(() => upsertUserProfile())
+      .then(() => setAuthReady(true))
+      .catch(() => setAuthReady(false));
+  }, []);
+
+  useEffect(() => {
+    if (!useSupabase) return;
+
+    let active = true;
+
+    const load = async () => {
+      const existing = await fetchSessionSummary(sessionId);
+      if (!active) return;
+      if (existing) {
+        setSummary(existing);
+      } else {
+        const [events, videos] = await Promise.all([
+          fetchScrollEvents(sessionId),
+          fetchVideos({ fallbackToDemo: false }),
+        ]);
+        if (!active) return;
+        const videoMap = new Map<string, Video>(videos.map((v) => [v.id, v]));
+        const computed = buildSessionSummary(sessionId, events, videoMap);
+        setSummary(computed);
+        insertSessionSummary(computed);
+      }
+
+      const textCards = await fetchTextCards(sessionId);
+      if (!active) return;
+      if (textCards.length > 0) setCards(textCards);
+    };
+
+    load();
+
+    return () => {
+      active = false;
+    };
+  }, [sessionId, useSupabase]);
 
   return (
     <div className="relative">
@@ -63,19 +128,17 @@ export default function RevealPage() {
 
       {step === "umap" && (
         <UmapReveal
-          featureVector={
-            DEMO_SESSION_SUMMARY.final_feature_vector
-          }
+          featureVector={summary.final_feature_vector}
           onComplete={advanceStep}
         />
       )}
 
       {step === "text_cards" && (
-        <TextCardReplay cards={DEMO_TEXT_CARDS} onComplete={advanceStep} />
+        <TextCardReplay cards={cards} onComplete={advanceStep} />
       )}
 
       {step === "score" && (
-        <ScoreReveal summary={DEMO_SESSION_SUMMARY} onComplete={advanceStep} />
+        <ScoreReveal summary={summary} onComplete={advanceStep} />
       )}
 
       {step === "opt_in" && (
