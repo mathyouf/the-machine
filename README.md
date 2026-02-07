@@ -51,8 +51,8 @@ falls back to local demo data.
 ## What is left to do (for public live tests)
 
 - Replace anonymous auth with real sign-in (email/OAuth) and user profiles.
-- Tighten RLS further for production (rate limits, write validation).
-- Add robust error handling + reconnect states for realtime.
-- Add explicit consent UX and data retention policy for camera data.
-- Add abuse prevention (rate limits, moderation, quotas).
+- ~~Tighten RLS further for production (rate limits, write validation).~~ ✅ Server-side rate limiting via RLS (migration 006) + content length validation.
+- ~~Add robust error handling + reconnect states for realtime.~~ ✅ Auto-reconnect with exponential backoff, connection status banner, error boundaries.
+- ~~Add explicit consent UX and data retention policy for camera data.~~ ✅ Detailed camera consent modal with data policy breakdown.
+- ~~Add abuse prevention (rate limits, moderation, quotas).~~ ✅ Client-side + server-side rate limits for text cards, scroll events, camera frames.
 - Expand/curate the video corpus and metadata pipeline.

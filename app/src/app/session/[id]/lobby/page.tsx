@@ -247,9 +247,17 @@ export default function LobbyPage() {
   }, [state, countdown, router, role, sessionId]);
 
   return (
-    <div className="fixed inset-0 bg-black flex flex-col items-center justify-center px-6 sacred-geometry-bg">
-      {/* Sacred geometry background */}
-      <div className="absolute inset-0 flex items-center justify-center opacity-5">
+    <>
+      {showAuthModal && (
+        <AuthModal
+          onClose={() => setShowAuthModal(false)}
+          onSuccess={handleAuthSuccess}
+        />
+      )}
+
+      <div className="fixed inset-0 bg-black flex flex-col items-center justify-center px-6 sacred-geometry-bg">
+        {/* Sacred geometry background */}
+        <div className="absolute inset-0 flex items-center justify-center opacity-5">
         <svg viewBox="0 0 400 400" className="w-[500px] h-[500px]">
           <circle
             cx="200"
