@@ -4,8 +4,8 @@ import { useState, useEffect, useMemo } from "react";
 import { useRouter, useParams } from "next/navigation";
 import {
   assignSessionRole,
-  createSessionSlot,
   fetchSessionSlot,
+  findOrCreateSession,
   upsertUserProfile,
 } from "@/lib/supabase/data";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase/client";
@@ -15,6 +15,7 @@ import { isUuid } from "@/lib/supabase/utils";
 type LobbyState =
   | "role_selection"
   | "checking_permissions"
+  | "searching"
   | "waiting_for_partner"
   | "partner_joined"
   | "countdown"
@@ -26,70 +27,57 @@ export default function LobbyPage() {
   const rawSessionId = params?.id ?? "demo";
   const useSupabase = isSupabaseConfigured && rawSessionId !== "demo";
   const isValidSessionId = useMemo(() => isUuid(rawSessionId), [rawSessionId]);
-  const isCreator = useSupabase && !isValidSessionId;
-  const [state, setState] = useState<LobbyState>(
-    isCreator ? "role_selection" : "checking_permissions"
-  );
+  // "new" or non-UUID = auto-matchmaking flow; UUID = direct link join
+  const isAutoMatch = useSupabase && !isValidSessionId;
+  const [state, setState] = useState<LobbyState>("role_selection");
   const [countdown, setCountdown] = useState(3);
-  const [cameraGranted, setCameraGranted] = useState(false);
   const [role, setRole] = useState<"optimizer" | "scroller">("scroller");
   const [sessionId, setSessionId] = useState<string>("demo");
-  const [shareLink, setShareLink] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
-  const [linkCopied, setLinkCopied] = useState(false);
 
-  // Creator picks a role, then we create the session
+  // Auto-matchmaking: user picks role, RPC finds or creates session
   const handleRoleSelected = async (chosenRole: "optimizer" | "scroller") => {
-    setState("checking_permissions");
     setRole(chosenRole);
+
+    if (!useSupabase) {
+      // Demo flow
+      setState("searching");
+      setTimeout(() => setState("waiting_for_partner"), 1500);
+      setTimeout(() => setState("partner_joined"), 4000);
+      setTimeout(() => setState("countdown"), 5500);
+      return;
+    }
+
+    setState("searching");
 
     try {
       await ensureAnonSession();
       await upsertUserProfile();
 
-      const id = crypto.randomUUID();
-      setSessionId(id);
-      setShareLink(`${window.location.origin}/session/${id}/lobby`);
+      if (isAutoMatch) {
+        // Auto-matchmaking via RPC
+        const result = await findOrCreateSession(chosenRole);
+        if (!result) throw new Error("Matchmaking failed.");
 
-      const created = await createSessionSlot(id, chosenRole, "lobby");
-      if (!created) throw new Error("Failed to create session slot.");
-      setCameraGranted(true);
-      setState("waiting_for_partner");
-    } catch (err) {
-      console.error(err);
-      setState("error");
-      setError("Unable to create the session. Please refresh.");
-    }
-  };
+        setSessionId(result.session_id);
 
-  // Joiner flow: auto-assign opposite role when visiting a UUID link
-  useEffect(() => {
-    if (!useSupabase) {
-      setSessionId("demo");
-      return;
-    }
-
-    // Creators start in role_selection — don't auto-init
-    if (isCreator) return;
-
-    let active = true;
-
-    const init = async () => {
-      try {
-        await ensureAnonSession();
-        await upsertUserProfile();
-
+        if (result.matched) {
+          // Immediately matched!
+          setState("partner_joined");
+          setTimeout(() => setState("countdown"), 1500);
+        } else {
+          // Waiting for a partner \u2014 subscribe to changes
+          setState("waiting_for_partner");
+        }
+      } else {
+        // Direct link join \u2014 join existing session
         const id = rawSessionId;
-        if (!active) return;
         setSessionId(id);
-        setShareLink(`${window.location.origin}/session/${id}/lobby`);
 
         const existing = await fetchSessionSlot(id);
-        if (!active) return;
-
         if (!existing) {
           setState("error");
-          setError("Session not found. Ask for a new link.");
+          setError("Session not found.");
           return;
         }
 
@@ -101,54 +89,78 @@ export default function LobbyPage() {
           await assignSessionRole(id, "scroller");
         } else {
           setState("error");
-          setError("This session is full. Ask for a new link.");
+          setError("This session is full.");
           return;
         }
 
-        setCameraGranted(true);
-        setState("waiting_for_partner");
+        // Both roles now filled
+        setState("partner_joined");
+        setTimeout(() => setState("countdown"), 1500);
+      }
+    } catch (err) {
+      console.error(err);
+      setState("error");
+      setError("Something went wrong. Please refresh and try again.");
+    }
+  };
+
+  // Direct link join: auto-detect and skip role selection
+  useEffect(() => {
+    if (!useSupabase || isAutoMatch) return;
+    // This is a UUID link \u2014 the user is joining a specific session
+    // They still pick a role, but we can pre-check the session
+    let active = true;
+
+    const init = async () => {
+      try {
+        await ensureAnonSession();
+        await upsertUserProfile();
+
+        const existing = await fetchSessionSlot(rawSessionId);
+        if (!active) return;
+
+        if (!existing) {
+          setState("error");
+          setError("Session not found. Ask for a new link.");
+          return;
+        }
+
+        if (existing.optimizer_id && existing.scroller_id) {
+          setState("error");
+          setError("This session is full.");
+          return;
+        }
+
+        // Auto-assign the available role
+        const availableRole = !existing.optimizer_id ? "optimizer" : "scroller";
+        setRole(availableRole);
+        setSessionId(rawSessionId);
+
+        // Immediately join
+        await assignSessionRole(rawSessionId, availableRole);
+        if (!active) return;
+
+        setState("partner_joined");
+        setTimeout(() => setState("countdown"), 1500);
       } catch (err) {
         console.error(err);
-        setState("error");
-        setError("Unable to initialize the session. Please refresh.");
+        if (active) {
+          setState("error");
+          setError("Unable to join session. Please refresh.");
+        }
       }
     };
 
     init();
-
     return () => {
       active = false;
     };
-  }, [isValidSessionId, rawSessionId, useSupabase, isCreator]);
+  }, [isValidSessionId, rawSessionId, useSupabase, isAutoMatch]);
 
-  // Simulate lobby flow
-  useEffect(() => {
-    if (useSupabase) return;
-    // Step 1: Check camera permissions
-    const camTimer = setTimeout(() => {
-      setCameraGranted(true);
-      setState("waiting_for_partner");
-    }, 2000);
-
-    // Step 2: Partner "joins"
-    const partnerTimer = setTimeout(() => {
-      setState("partner_joined");
-    }, 5000);
-
-    // Step 3: Countdown
-    const countdownTimer = setTimeout(() => {
-      setState("countdown");
-    }, 7000);
-
-    return () => {
-      clearTimeout(camTimer);
-      clearTimeout(partnerTimer);
-      clearTimeout(countdownTimer);
-    };
-  }, [useSupabase]);
-
+  // Subscribe to session_slots changes when waiting for a partner
   useEffect(() => {
     if (!useSupabase || !sessionId || !isUuid(sessionId)) return;
+    if (state !== "waiting_for_partner") return;
 
     const channel = supabase
       .channel(`session_slot:${sessionId}`)
@@ -176,13 +188,19 @@ export default function LobbyPage() {
     return () => {
       channel.unsubscribe();
     };
-  }, [sessionId, useSupabase]);
+  }, [sessionId, useSupabase, state]);
+
+  // Demo flow simulation
+  useEffect(() => {
+    if (useSupabase) return;
+    if (state !== "searching") return;
+    setSessionId("demo");
+  }, [state, useSupabase]);
 
   // Countdown timer
   useEffect(() => {
     if (state !== "countdown") return;
     if (countdown <= 0) {
-      // Navigate to the appropriate view
       router.push(`/session/${sessionId}/${role}`);
       return;
     }
@@ -227,7 +245,7 @@ export default function LobbyPage() {
           THE MACHINE
         </p>
 
-        {/* Role selection (creator only) */}
+        {/* Role selection */}
         {state === "role_selection" && (
           <div className="space-y-8">
             <div className="space-y-2">
@@ -235,7 +253,7 @@ export default function LobbyPage() {
                 Choose your role
               </p>
               <p className="text-sm text-gray-500">
-                Your partner will get the opposite role.
+                You&apos;ll be matched with a partner automatically.
               </p>
             </div>
 
@@ -269,7 +287,17 @@ export default function LobbyPage() {
           </div>
         )}
 
-        {/* Checking permissions */}
+        {/* Searching for match */}
+        {state === "searching" && (
+          <div className="space-y-6">
+            <div className="w-10 h-10 border-2 border-accent border-t-transparent rounded-full animate-spin mx-auto" />
+            <p className="text-gray-400 tracking-wider">
+              Finding you a match...
+            </p>
+          </div>
+        )}
+
+        {/* Checking permissions (direct link join) */}
         {state === "checking_permissions" && (
           <div className="space-y-6">
             <div className="w-10 h-10 border-2 border-accent border-t-transparent rounded-full animate-spin mx-auto" />
@@ -284,39 +312,22 @@ export default function LobbyPage() {
           <div className="space-y-6">
             <div className="flex items-center justify-center gap-3">
               <div className="w-3 h-3 bg-green-500 rounded-full" />
-              <span className="text-sm text-green-400/70">Session ready</span>
+              <span className="text-sm text-green-400/70">In queue</span>
             </div>
 
             <div className="border border-gray-800 p-6 space-y-3">
               <p className="text-lg text-white tracking-wider">
-                Waiting for your partner...
+                Searching for a partner...
               </p>
               <p className="text-sm text-gray-500">
                 You are the{" "}
                 <span className="text-accent font-bold">{role.toUpperCase()}</span>
               </p>
+              <p className="text-xs text-gray-600 mt-2">
+                Waiting for someone to join as{" "}
+                {role === "scroller" ? "Optimizer" : "Scroller"}
+              </p>
             </div>
-
-            {useSupabase && shareLink && (
-              <div className="border border-accent/30 bg-accent/5 p-5 space-y-3">
-                <p className="text-sm text-accent tracking-wider font-medium">
-                  Send this link to your partner
-                </p>
-                <div className="bg-black/50 border border-gray-700 p-3 rounded text-sm text-gray-300 break-all select-all">
-                  {shareLink}
-                </div>
-                <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(shareLink);
-                    setLinkCopied(true);
-                    setTimeout(() => setLinkCopied(false), 2000);
-                  }}
-                  className="w-full py-2 border border-accent/50 text-accent text-sm tracking-wider hover:bg-accent/10 transition-colors"
-                >
-                  {linkCopied ? "COPIED!" : "COPY LINK"}
-                </button>
-              </div>
-            )}
 
             <div className="flex items-center justify-center gap-2">
               <div className="w-2 h-2 bg-accent rounded-full animate-pulse" />
@@ -337,7 +348,7 @@ export default function LobbyPage() {
           <div className="space-y-6">
             <div className="border border-accent/30 bg-accent/5 p-6">
               <p className="text-accent text-lg tracking-wider mb-2">
-                Partner connected
+                Partner found!
               </p>
               <p className="text-gray-400 text-sm">
                 Preparing your session...
@@ -362,7 +373,7 @@ export default function LobbyPage() {
         )}
 
         {/* Role description */}
-        {state !== "role_selection" && state !== "checking_permissions" && (
+        {state !== "role_selection" && state !== "searching" && state !== "error" && (
           <div className="mt-12 border-t border-gray-900 pt-6">
             {role === "scroller" ? (
               <div className="text-left space-y-2">
@@ -387,6 +398,12 @@ export default function LobbyPage() {
         {state === "error" && (
           <div className="mt-8 border border-red-500/30 bg-red-500/5 p-4 text-center">
             <p className="text-red-400 text-sm">{error}</p>
+            <button
+              onClick={() => window.location.reload()}
+              className="mt-4 px-6 py-2 border border-gray-700 text-gray-400 text-xs tracking-widest hover:border-accent hover:text-accent transition-all"
+            >
+              TRY AGAIN
+            </button>
           </div>
         )}
       </div>

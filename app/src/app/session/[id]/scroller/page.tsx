@@ -7,7 +7,7 @@ import { useCameraCapture } from "@/components/scroller/CameraCapture";
 import { DEMO_VIDEOS } from "@/lib/demo-data";
 import { buildSystemDefaultQueue } from "@/lib/video-utils";
 import { createSessionChannel } from "@/lib/supabase/realtime";
-import { fetchVideos, insertScrollEvent, upsertUserProfile } from "@/lib/supabase/data";
+import { fetchVideos, insertScrollEvent, updateSessionStatus, upsertUserProfile } from "@/lib/supabase/data";
 import { isSupabaseConfigured } from "@/lib/supabase/client";
 import { isUuid } from "@/lib/supabase/utils";
 import { Video } from "@/lib/supabase/types";
@@ -129,6 +129,7 @@ export default function ScrollerPage() {
 
     channel.broadcast({ type: "session_start", timestamp: Date.now() });
     setSessionStartTime(Date.now());
+    updateSessionStatus(sessionId, "active");
 
     return () => {
       unsubscribe();

@@ -188,3 +188,95 @@ export async function upsertUserProfile() {
     { onConflict: "id" }
   );
 }
+
+// --- Matchmaking ---
+
+export async function findOrCreateSession(
+  role: "optimizer" | "scroller"
+): Promise<{
+  session_id: string;
+  status: string;
+  optimizer_id: string | null;
+  scroller_id: string | null;
+  matched: boolean;
+} | null> {
+  if (!isSupabaseConfigured) return null;
+  const { data, error } = await supabase.rpc("find_or_create_session", {
+    p_role: role,
+  });
+  if (error) {
+    console.error("findOrCreateSession error:", error);
+    return null;
+  }
+  return data as {
+    session_id: string;
+    status: string;
+    optimizer_id: string | null;
+    scroller_id: string | null;
+    matched: boolean;
+  };
+}
+
+// --- Session status ---
+
+export async function updateSessionStatus(
+  sessionId: string,
+  status: SessionStatus
+) {
+  if (!isSupabaseConfigured) return;
+  await supabase
+    .from("session_slots")
+    .update({ status })
+    .eq("id", sessionId);
+}
+
+// --- Reveal: opt-in ---
+
+export async function updateOptInDecision(
+  sessionId: string,
+  role: "optimizer" | "scroller",
+  accepted: boolean
+) {
+  if (!isSupabaseConfigured) return;
+  const col =
+    role === "scroller" ? "scroller_accepted_call" : "optimizer_accepted_call";
+  await supabase
+    .from("session_summaries")
+    .update({ [col]: accepted })
+    .eq("session_id", sessionId);
+}
+
+// --- Role detection ---
+
+export async function fetchUserRole(
+  sessionId: string
+): Promise<"optimizer" | "scroller" | null> {
+  if (!isSupabaseConfigured) return null;
+  const userId = await getUserId();
+  if (!userId) return null;
+  const slot = await fetchSessionSlot(sessionId);
+  if (!slot) return null;
+  if (slot.optimizer_id === userId) return "optimizer";
+  if (slot.scroller_id === userId) return "scroller";
+  return null;
+}
+
+// --- Field report ---
+
+export async function insertFieldReport(
+  sessionId: string,
+  role: "optimizer" | "scroller",
+  content: string,
+  shareConsent: boolean
+) {
+  if (!isSupabaseConfigured) return;
+  const userId = await getUserId();
+  if (!userId) return;
+  await supabase.from("field_reports").insert({
+    session_id: sessionId,
+    user_id: userId,
+    role,
+    content,
+    share_consent: shareConsent,
+  });
+}

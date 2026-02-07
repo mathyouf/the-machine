@@ -11,17 +11,21 @@ import {
   fetchScrollEvents,
   fetchSessionSummary,
   fetchTextCards,
+  fetchUserRole,
   fetchVideos,
+  insertFieldReport,
   insertSessionSummary,
+  updateOptInDecision,
+  updateSessionStatus,
   upsertUserProfile,
 } from "@/lib/supabase/data";
-import { isSupabaseConfigured } from "@/lib/supabase/client";
+import { isSupabaseConfigured, supabase } from "@/lib/supabase/client";
 import { isUuid } from "@/lib/supabase/utils";
 import { buildSessionSummary } from "@/lib/supabase/summary";
 import { Video } from "@/lib/supabase/types";
 import { ensureAnonSession } from "@/lib/supabase/auth";
 
-type RevealStep = "umap" | "text_cards" | "score" | "opt_in" | "call" | "debrief";
+type RevealStep = "umap" | "text_cards" | "score" | "opt_in" | "both_accepted" | "debrief";
 
 export default function RevealPage() {
   const params = useParams<{ id: string }>();
@@ -31,6 +35,11 @@ export default function RevealPage() {
   const [step, setStep] = useState<RevealStep>("umap");
   const [summary, setSummary] = useState(DEMO_SESSION_SUMMARY);
   const [cards, setCards] = useState(DEMO_TEXT_CARDS);
+  const [userRole, setUserRole] = useState<"optimizer" | "scroller" | null>(null);
+  const [partnerDecision, setPartnerDecision] = useState<boolean | null>(null);
+  const [fieldReportText, setFieldReportText] = useState("");
+  const [shareConsent, setShareConsent] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   const advanceStep = useCallback(() => {
     setStep((prev) => {
@@ -42,16 +51,16 @@ export default function RevealPage() {
         case "score":
           return "opt_in";
         case "opt_in":
-          return "call";
+          return "debrief";
         default:
           return "debrief";
       }
     });
   }, []);
 
-  // Skip button for demo
   const handleSkip = () => advanceStep();
 
+  // Auth + role detection
   useEffect(() => {
     if (!isSupabaseConfigured) {
       setAuthReady(true);
@@ -63,6 +72,21 @@ export default function RevealPage() {
       .catch(() => setAuthReady(false));
   }, []);
 
+  // Detect user role
+  useEffect(() => {
+    if (!useSupabase) return;
+    fetchUserRole(sessionId).then((role) => {
+      if (role) setUserRole(role);
+    });
+  }, [sessionId, useSupabase]);
+
+  // Set session status to 'reveal'
+  useEffect(() => {
+    if (!useSupabase) return;
+    updateSessionStatus(sessionId, "reveal");
+  }, [sessionId, useSupabase]);
+
+  // Load summary + text cards
   useEffect(() => {
     if (!useSupabase) return;
 
@@ -97,9 +121,71 @@ export default function RevealPage() {
     };
   }, [sessionId, useSupabase]);
 
+  // Subscribe to session_summaries for partner's opt-in decision
+  useEffect(() => {
+    if (!useSupabase || !userRole) return;
+
+    const partnerCol =
+      userRole === "scroller" ? "optimizer_accepted_call" : "scroller_accepted_call";
+
+    const channel = supabase
+      .channel(`summary_optin:${sessionId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "session_summaries",
+          filter: `session_id=eq.${sessionId}`,
+        },
+        (payload) => {
+          const next = payload.new as Record<string, unknown>;
+          if (next[partnerCol] !== null && next[partnerCol] !== undefined) {
+            setPartnerDecision(next[partnerCol] as boolean);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      channel.unsubscribe();
+    };
+  }, [sessionId, useSupabase, userRole]);
+
+  // Opt-in handlers
+  const handleOptInAccept = useCallback(() => {
+    if (useSupabase && userRole) {
+      updateOptInDecision(sessionId, userRole, true);
+    }
+  }, [sessionId, useSupabase, userRole]);
+
+  const handleOptInDecline = useCallback(() => {
+    if (useSupabase && userRole) {
+      updateOptInDecision(sessionId, userRole, false);
+    }
+    setStep("debrief");
+  }, [sessionId, useSupabase, userRole]);
+
+  const handleBothAccepted = useCallback(() => {
+    setStep("both_accepted");
+  }, []);
+
+  // Field report submission
+  const handleSubmitFieldReport = async () => {
+    if (submitting) return;
+    setSubmitting(true);
+
+    if (useSupabase && userRole && fieldReportText.trim()) {
+      await insertFieldReport(sessionId, userRole, fieldReportText.trim(), shareConsent);
+      await updateSessionStatus(sessionId, "completed");
+    }
+
+    window.location.href = "/";
+  };
+
   return (
     <div className="relative">
-      {/* Skip button for demo navigation */}
+      {/* Skip button */}
       <button
         onClick={handleSkip}
         className="fixed top-4 right-4 z-50 text-xs text-gray-600 hover:text-gray-400 tracking-widest border border-gray-800 hover:border-gray-600 px-3 py-1.5 transition-colors"
@@ -143,36 +229,31 @@ export default function RevealPage() {
 
       {step === "opt_in" && (
         <MutualOptIn
-          onAccept={() => setStep("call")}
-          onDecline={() => setStep("debrief")}
+          onAccept={handleOptInAccept}
+          onDecline={handleOptInDecline}
+          onBothAccepted={handleBothAccepted}
+          partnerDecision={partnerDecision}
+          isRealSession={useSupabase}
         />
       )}
 
-      {step === "call" && (
+      {step === "both_accepted" && (
         <div className="fixed inset-0 bg-black flex flex-col items-center justify-center px-6">
           <div className="text-center max-w-md">
             <p className="text-xs text-gray-600 tracking-[0.3em] mb-6">
-              VIDEO CALL
+              MUTUAL MATCH
             </p>
-            <div className="grid grid-cols-2 gap-4 mb-8">
-              <div className="aspect-video bg-gray-900 border border-gray-800 flex items-center justify-center">
-                <span className="text-gray-600 text-xs tracking-wider">YOU</span>
-              </div>
-              <div className="aspect-video bg-gray-900 border border-gray-800 flex items-center justify-center">
-                <span className="text-gray-600 text-xs tracking-wider">
-                  YOUR MATCH
-                </span>
-              </div>
-            </div>
-            <p className="text-gray-400 text-sm mb-6">
-              In a live session, you&apos;d now be on a video call with your
-              Optimizer/Scroller.
+            <p className="text-2xl text-accent mb-4 tracking-wider">
+              You both said yes.
+            </p>
+            <p className="text-gray-400 text-sm mb-8 leading-relaxed">
+              The Machine brought you together. What happens next is up to you.
             </p>
             <button
               onClick={() => setStep("debrief")}
               className="px-8 py-2 border border-gray-700 text-gray-400 text-xs tracking-widest hover:border-accent hover:text-accent transition-all"
             >
-              END CALL
+              CONTINUE TO DEBRIEF
             </button>
           </div>
         </div>
@@ -202,21 +283,26 @@ export default function RevealPage() {
               <textarea
                 className="w-full bg-gray-900 border border-gray-700 text-white font-mono text-sm p-4 h-32 focus:border-accent focus:outline-none resize-none placeholder:text-gray-600"
                 placeholder="Write your field report..."
+                value={fieldReportText}
+                onChange={(e) => setFieldReportText(e.target.value)}
               />
 
               <label className="flex items-center gap-2 text-xs text-gray-500">
                 <input
                   type="checkbox"
                   className="accent-accent"
+                  checked={shareConsent}
+                  onChange={(e) => setShareConsent(e.target.checked)}
                 />
                 May we share this? (anonymized)
               </label>
 
               <button
-                onClick={() => (window.location.href = "/")}
-                className="w-full py-3 bg-accent text-black font-bold tracking-widest hover:bg-accent/80 transition-all"
+                onClick={handleSubmitFieldReport}
+                disabled={submitting}
+                className="w-full py-3 bg-accent text-black font-bold tracking-widest hover:bg-accent/80 transition-all disabled:opacity-50"
               >
-                SUBMIT & FINISH
+                {submitting ? "SUBMITTING..." : "SUBMIT & FINISH"}
               </button>
             </div>
           </div>
