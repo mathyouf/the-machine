@@ -9,10 +9,12 @@ import {
   upsertUserProfile,
 } from "@/lib/supabase/data";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase/client";
-import { ensureAnonSession } from "@/lib/supabase/auth";
+import { ensureAnonSession, ensureAuthSession } from "@/lib/supabase/auth";
 import { isUuid } from "@/lib/supabase/utils";
+import { AuthModal } from "@/components/auth/AuthModal";
 
 type LobbyState =
+  | "auth_required"
   | "role_selection"
   | "checking_permissions"
   | "searching"
@@ -29,11 +31,34 @@ export default function LobbyPage() {
   const isValidSessionId = useMemo(() => isUuid(rawSessionId), [rawSessionId]);
   // "new" or non-UUID = auto-matchmaking flow; UUID = direct link join
   const isAutoMatch = useSupabase && !isValidSessionId;
-  const [state, setState] = useState<LobbyState>("role_selection");
+  const [state, setState] = useState<LobbyState>(useSupabase ? "auth_required" : "role_selection");
   const [countdown, setCountdown] = useState(3);
   const [role, setRole] = useState<"optimizer" | "scroller">("scroller");
   const [sessionId, setSessionId] = useState<string>("demo");
   const [error, setError] = useState<string | null>(null);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+
+  // Check authentication on mount
+  useEffect(() => {
+    if (!useSupabase) return;
+
+    const checkAuth = async () => {
+      const session = await ensureAuthSession();
+      if (!session) {
+        setState("auth_required");
+        setShowAuthModal(true);
+      } else {
+        setState("role_selection");
+      }
+    };
+
+    checkAuth();
+  }, [useSupabase]);
+
+  const handleAuthSuccess = () => {
+    setShowAuthModal(false);
+    setState("role_selection");
+  };
 
   // Auto-matchmaking: user picks role, RPC finds or creates session
   const handleRoleSelected = async (chosenRole: "optimizer" | "scroller") => {
@@ -51,7 +76,14 @@ export default function LobbyPage() {
     setState("searching");
 
     try {
-      await ensureAnonSession();
+      // Verify auth session exists
+      const session = await ensureAuthSession();
+      if (!session) {
+        setState("auth_required");
+        setShowAuthModal(true);
+        return;
+      }
+
       await upsertUserProfile();
 
       if (isAutoMatch) {
@@ -113,7 +145,13 @@ export default function LobbyPage() {
 
     const init = async () => {
       try {
-        await ensureAnonSession();
+        const session = await ensureAuthSession();
+        if (!session) {
+          setState("auth_required");
+          setShowAuthModal(true);
+          return;
+        }
+
         await upsertUserProfile();
 
         const existing = await fetchSessionSlot(rawSessionId);
