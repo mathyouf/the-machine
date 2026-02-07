@@ -11,7 +11,10 @@ import { fetchVideos, insertScrollEvent, updateSessionStatus, upsertUserProfile 
 import { isSupabaseConfigured } from "@/lib/supabase/client";
 import { isUuid } from "@/lib/supabase/utils";
 import { Video } from "@/lib/supabase/types";
+import { ConnectionStatus } from "@/lib/supabase/realtime";
 import { ensureAnonSession } from "@/lib/supabase/auth";
+import { ConnectionStatusBanner } from "@/components/shared/ConnectionStatus";
+import { scrollEventLimiter, cameraFrameLimiter } from "@/lib/rate-limit";
 
 export default function ScrollerPage() {
   const params = useParams<{ id: string }>();
@@ -25,6 +28,8 @@ export default function ScrollerPage() {
   const [cameraAllowed, setCameraAllowed] = useState(false);
   const [showConsent, setShowConsent] = useState(true);
   const [cameraError, setCameraError] = useState<string | null>(null);
+  const [connStatus, setConnStatus] = useState<ConnectionStatus>("connecting");
+  const [connError, setConnError] = useState<string | null>(null);
   const channelRef = useRef<ReturnType<typeof createSessionChannel> | null>(null);
   const optimizerQueuedIdsRef = useRef<Set<string>>(new Set());
   const videosRef = useRef<Video[]>([]);
@@ -62,6 +67,7 @@ export default function ScrollerPage() {
   useCameraCapture({
     onFrame: (base64) => {
       if (!useSupabase) return;
+      if (!cameraFrameLimiter.tryProceed()) return;
       channelRef.current?.broadcast({
         type: "camera_frame",
         frame: base64,
@@ -99,6 +105,10 @@ export default function ScrollerPage() {
 
     const channel = createSessionChannel(sessionId);
     channelRef.current = channel;
+    channel.onStatusChange((status, error) => {
+      setConnStatus(status);
+      setConnError(error ?? null);
+    });
 
     const unsubscribe = channel.subscribe((event) => {
       if (event.type === "text_card") {
@@ -145,7 +155,7 @@ export default function ScrollerPage() {
       const timestampMs =
         sessionStartTime !== null ? Date.now() - sessionStartTime : 0;
 
-      if (useSupabase) {
+      if (useSupabase && scrollEventLimiter.tryProceed()) {
         channelRef.current?.broadcast({
           type: "scroll_event",
           video_id: videoId,
@@ -183,6 +193,7 @@ export default function ScrollerPage() {
 
   return (
     <>
+      <ConnectionStatusBanner status={connStatus} error={connError} />
       <VideoFeed
         videos={videos}
         onDwellEvent={handleDwellEvent}
@@ -198,10 +209,20 @@ export default function ScrollerPage() {
             <p className="text-xs text-gray-600 tracking-[0.3em] mb-4">
               CAMERA CONSENT
             </p>
-            <p className="text-sm text-gray-400 mb-6 leading-relaxed">
-              Your camera feed is sent as low-res snapshots to the Optimizer
-              during this session. It is not stored.
+            <p className="text-sm text-gray-400 mb-4 leading-relaxed">
+              Your camera feed is sent as low-res snapshots (320×240) to the
+              Optimizer during this session so they can read your reactions.
             </p>
+            <div className="border border-gray-800 bg-gray-900/50 p-3 mb-4 text-left space-y-2">
+              <p className="text-xs text-accent tracking-widest">DATA POLICY</p>
+              <ul className="text-xs text-gray-500 space-y-1 list-disc list-inside">
+                <li>Snapshots are sent peer-to-peer via Supabase Realtime broadcast</li>
+                <li>Frames are <strong className="text-gray-400">never stored</strong> on any server or database</li>
+                <li>Only your session partner sees the feed, in real-time only</li>
+                <li>Camera stops immediately when the session ends</li>
+                <li>You can revoke access anytime by refreshing the page</li>
+              </ul>
+            </div>
             {cameraError && (
               <p className="text-xs text-red-400 mb-4">{cameraError}</p>
             )}
@@ -214,7 +235,7 @@ export default function ScrollerPage() {
                 }}
                 className="w-full py-2 bg-accent text-black font-bold tracking-widest text-xs hover:bg-accent/80 transition-all"
               >
-                ALLOW CAMERA
+                I UNDERSTAND — ALLOW CAMERA
               </button>
               <button
                 onClick={() => {
@@ -225,6 +246,9 @@ export default function ScrollerPage() {
               >
                 CONTINUE WITHOUT CAMERA
               </button>
+              <p className="text-[10px] text-gray-700 mt-1">
+                The experience works without camera, but the Optimizer won&apos;t see your reactions.
+              </p>
             </div>
           </div>
         </div>

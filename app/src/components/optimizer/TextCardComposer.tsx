@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
+import { textCardLimiter } from "@/lib/rate-limit";
 
 interface TextCardComposerProps {
   onSend: (content: string) => void;
@@ -25,14 +26,20 @@ export function TextCardComposer({
   sessionTime,
 }: TextCardComposerProps) {
   const [text, setText] = useState("");
+  const [rateLimited, setRateLimited] = useState(false);
   const maxLen = 140;
 
-  const handleSend = () => {
+  const handleSend = useCallback(() => {
     const trimmed = text.trim();
     if (trimmed.length === 0 || trimmed.length > maxLen) return;
+    if (!textCardLimiter.tryProceed()) {
+      setRateLimited(true);
+      setTimeout(() => setRateLimited(false), 3000);
+      return;
+    }
     onSend(trimmed);
     setText("");
-  };
+  }, [text, maxLen, onSend]);
 
   const formatTime = (s: number) => {
     const m = Math.floor(s / 60);
@@ -76,14 +83,16 @@ export function TextCardComposer({
         {/* Send button */}
         <button
           onClick={handleSend}
-          disabled={text.trim().length === 0}
+          disabled={text.trim().length === 0 || rateLimited}
           className={`w-full py-2 text-xs tracking-widest font-bold transition-all ${
-            text.trim().length > 0
-              ? "bg-white/10 text-white hover:bg-white/20 border border-white/20"
-              : "bg-gray-900 text-gray-600 cursor-not-allowed border border-gray-800"
+            rateLimited
+              ? "bg-red-900/30 text-red-400 cursor-not-allowed border border-red-800/30"
+              : text.trim().length > 0
+                ? "bg-white/10 text-white hover:bg-white/20 border border-white/20"
+                : "bg-gray-900 text-gray-600 cursor-not-allowed border border-gray-800"
           }`}
         >
-          SEND CARD
+          {rateLimited ? "SLOW DOWN" : "SEND CARD"}
         </button>
 
         {/* Suggestions */}

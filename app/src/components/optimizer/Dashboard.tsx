@@ -8,6 +8,8 @@ import { isSupabaseConfigured } from "@/lib/supabase/client";
 import { isUuid } from "@/lib/supabase/utils";
 import { getPrimaryDimension } from "@/lib/video-utils";
 import { ensureAnonSession } from "@/lib/supabase/auth";
+import { ConnectionStatus } from "@/lib/supabase/realtime";
+import { ConnectionStatusBanner } from "../shared/ConnectionStatus";
 import { FaceFeedPanel } from "./FaceFeed";
 import { DimensionMap } from "./DimensionMap";
 import { VideoPickerPanel } from "./VideoPickerPanel";
@@ -42,6 +44,8 @@ export function OptimizerDashboard({ sessionId }: OptimizerDashboardProps) {
   const [videos, setVideos] = useState<Video[]>([]);
   const [latestFrame, setLatestFrame] = useState<string | null>(null);
   const [authReady, setAuthReady] = useState(false);
+  const [connStatus, setConnStatus] = useState<ConnectionStatus>("connecting");
+  const [connError, setConnError] = useState<string | null>(null);
   const sessionStartRef = useRef(Date.now());
   const channelRef = useRef<ReturnType<typeof createSessionChannel> | null>(null);
   const videoMapRef = useRef<Map<string, Video>>(new Map());
@@ -99,6 +103,10 @@ export function OptimizerDashboard({ sessionId }: OptimizerDashboardProps) {
 
     const channel = createSessionChannel(sessionId);
     channelRef.current = channel;
+    channel.onStatusChange((s, e) => {
+      setConnStatus(s);
+      setConnError(e ?? null);
+    });
 
     const unsubscribe = channel.subscribe((event) => {
       if (event.type === "scroll_event") {
@@ -252,6 +260,7 @@ export function OptimizerDashboard({ sessionId }: OptimizerDashboardProps) {
         dangerZone ? "danger-zone" : ""
       }`}
     >
+      <ConnectionStatusBanner status={connStatus} error={connError} />
       {/* Header */}
       <div className="flex items-center justify-between mb-4 border-b border-gray-800 pb-3">
         <div className="flex items-center gap-3">
