@@ -1,0 +1,156 @@
+VIRAL FEATURE IDEAS — THE MACHINE
+Research-backed features designed to produce shareable identity artifacts
+================================================================================
+
+Meta-principle: Make the data about YOU the shareable artifact, not the experience
+itself. Nobody screenshots "I played a game." Everybody screenshots "here's what
+the game revealed about me." Every feature below produces a personalized data
+visualization that functions as identity content — the modern equivalent of posting
+your Spotify Wrapped or your natal chart.
+
+================================================================================
+
+1. STATED vs. REVEALED PREFERENCES
+   Source: Joel et al. (2020) — 11,196 couples, stated preferences predict 0% of
+   actual romantic desire
+
+   Before session: ask Scroller to rank the five dimensions ("I think I like
+   cerebral content most"). After session: show actual dwell-time data side by
+   side. The gap between what you think you like and what you actually watch is
+   almost always shocking — and extremely screenshottable.
+
+   Shareable moment: "I thought I was a cerebral person but I'm actually communal"
+
+--------------------------------------------------------------------------------
+
+2. "WE KNEW IN 20 SECONDS" COUNTDOWN
+   Source: Scott et al. (2022) — 20 seconds of scrolling predicts Big Five
+
+   Show the Optimizer's uncertainty map freezing into confidence surprisingly
+   early. The Scroller sees: "By 47 seconds, your Optimizer already knew you'd
+   love that cooking video." The speed at which you become legible to a stranger
+   is unsettling in a way people want to share.
+
+   Shareable moment: "It took 3 videos to figure me out"
+
+--------------------------------------------------------------------------------
+
+3. TASTE FINGERPRINT (Behavioral Zodiac)
+   Source: Kosinski, Stillwell & Graepel (2013) — Likes predict personality better
+   than coworkers can
+
+   Make the UMAP shareable as a standalone identity artifact. "I'm a
+   high-Aesthetic, mid-Dark, zero-Communal." Give it a visual identity distinct
+   enough that people recognize it on sight in a feed. Zodiac is fake but viral
+   because it gives people identity language. This is real AND viral for the same
+   reason.
+
+   Shareable moment: The taste fingerprint image — designed as profile-picture-ready
+
+--------------------------------------------------------------------------------
+
+4. TASTE TWIN vs. TASTE OPPOSITE
+   Source: Fricke & Herzberg (2017) — Same genre, opposite personalities depending
+   on which attributes drew them
+
+   Match two people who like the same topics but for different psychological
+   reasons. One likes cooking for warmth, the other for aesthetics. Show divergent
+   dwell patterns on identical videos. "You both watched the same cooking video.
+   One of you watched the hands. The other watched the faces."
+
+   Shareable moment: Paired screenshots — two people posting divergent reactions
+
+--------------------------------------------------------------------------------
+
+5. "GUILTY SCROLL" METRIC
+   Source: Meta Reels RecSys (2026) — Watch time so misleading Meta had to
+   directly ask users if they liked what they watched
+
+   Surface which videos the Scroller watched for a long time but — based on
+   overall pattern — probably didn't enjoy (high dwell, low pattern-match to
+   preference vector). "You spent 45 seconds on this video but your taste profile
+   says you shouldn't have liked it. What happened?"
+
+   Shareable moment: "Why did I watch that for so long?"
+
+--------------------------------------------------------------------------------
+
+6. DARK TRIAD DIMENSION
+   Source: Manolika (2023) — Extraversion insignificant once you control for
+   Openness and Dark Triad, which actually drive media preferences
+
+   Most personality products only show flattering Big Five. Add Dark dimension
+   loading prominently. People who gravitate toward dark, transgressive content
+   score higher on narcissism and Machiavellianism. Don't label it — just show
+   the score. Controversial personality insights spread faster than flattering ones.
+
+   Shareable moment: "Why is my Dark score so high"
+
+--------------------------------------------------------------------------------
+
+7. MUSIC LIE DETECTOR ROUND
+   Source: Rentfrow & Gosling (2003) — Music preference predicts personality,
+   politics, and verbal IQ better than demographics
+
+   Add 30-second audio round between video blocks. Play 10-second clips from
+   STOMPR dimensions. Optimizer watches Scroller's face — music reactions are less
+   controllable than video reactions (can't fake visceral response to hated genre).
+   Music round validates or challenges video-based theory.
+
+   Shareable moment: "The videos said cerebral but the music says intense"
+
+--------------------------------------------------------------------------------
+
+8. AI vs. HUMAN OPTIMIZER CHALLENGE
+   Source: ChaLearn First Impressions V2 — Personality leaks through 15-second
+   video clips reliably enough for ML models to generalize
+
+   Run parallel AI personality prediction from Scroller's camera feed alongside
+   human Optimizer. At reveal, show both predictions. "Your human Optimizer said
+   high-Aesthetic, low-Thrilling. The AI said high-Aesthetic, mid-Thrilling. Who
+   was closer?" Leaderboard: humans vs. AI at reading strangers.
+
+   Content angle: Goes beyond dating Twitter into AI discourse — "humans still
+   beat AI at reading personality" (or don't) is a headline.
+
+--------------------------------------------------------------------------------
+
+9. PREDICTABILITY SCORE
+   Source: KuaiRec — Near-complete interaction matrix (almost every user saw
+   almost every video), eliminating selection bias
+
+   Give every Scroller a "predictability score" — how easy were you to read? Some
+   have coherent, consistent taste profiles. Others are chaotic or contrarian.
+   "You are in the 94th percentile of unpredictability" is something people will
+   put in their bio. Most unpredictable Scrollers become status symbols —
+   Optimizers want to try the hardest targets.
+
+   Shareable moment: Predictability percentile as identity badge
+   Secondary effect: Creates second leaderboard, gives Scrollers reason to return
+
+================================================================================
+
+IMPLEMENTATION PRIORITY (for v1 virality):
+1. Taste Fingerprint (#3) — lowest effort, highest share rate, works day one
+2. Stated vs. Revealed (#1) — one pre-session question, dramatic reveal payoff
+3. Predictability Score (#9) — computed from existing dwell data, no new UI needed
+4. "We Knew in 20 Seconds" (#2) — requires uncertainty tracking already in plan
+5. AI vs. Human (#8) — ship when camera pipeline is stable (v1.5)
+6. Music Round (#7) — v2, requires new content type and UI
+7. Taste Twin (#4) — v2, requires enough users to find meaningful pairs
+8. Guilty Scroll (#5) — v2, requires robust preference model
+9. Dark Triad (#6) — v2, requires validation study
+
+================================================================================
+
+REFERENCES:
+- Rentfrow, Goldberg & Zilca (2011). JPSP, 79, 223-258. PMC2964424
+- Rentfrow & Gosling (2003). JPSP, 84, 1236-1256
+- Joel et al. (2020). PNAS, 117, 19061-19071
+- Kosinski, Stillwell & Graepel (2013). PNAS, 110, 5802-5805
+- Scott et al. (2022). Scientific Reports
+- Fricke & Herzberg (2017). Journal of Research in Personality
+- Meta Engineering (2026). engineering.fb.com
+- Manolika (2023). Big Five and Beyond
+- KuaiRec dataset
+- ChaLearn First Impressions V2
