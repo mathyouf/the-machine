@@ -1,0 +1,1006 @@
+THE MACHINE — ENGINEERING PLAN
+================================
+
+Last updated: 2026-02-06
+Status: Draft for review before implementation
+
+
+TABLE OF CONTENTS
+-----------------
+1. What We're Building (one paragraph)
+2. Core Loop
+3. Design Principles
+4. Technical Stack
+5. Data Model
+6. Video Corpus Design
+7. Scoring System
+8. Session Flow (State Machine)
+9. Scroller Client
+10. Optimizer Client
+11. The Reveal Sequence
+12. Matching & Scheduling
+13. Shareable Artifacts
+14. Infrastructure & Deployment
+15. Build Sequence (14 days)
+16. Risk Register
+17. Post-v1 Roadmap
+18. Open Questions
+
+
+================================================================================
+1. WHAT WE'RE BUILDING
+================================================================================
+
+The Machine is a two-player web experience where one person (the Optimizer)
+acts as a human recommendation algorithm for another person (the Scroller).
+The Scroller scrolls through a TikTok-style video feed. The Optimizer watches
+the Scroller's camera, reads their reactions, and controls what videos appear
+next — trying to figure out what this stranger likes. Afterward, they meet.
+The Optimizer's skill is scored by how long the Scroller stays engaged and how
+efficiently the Optimizer maps the Scroller's personality. It's The Truman
+Show meets recommendation science.
+
+It's the first experiment on experiments.dating. It ships in 14 days.
+
+
+================================================================================
+2. CORE LOOP
+================================================================================
+
+1. Two strangers are matched. One becomes the Optimizer, one the Scroller.
+2. The Scroller opens a full-screen vertical video feed. They scroll.
+3. The Optimizer sees the Scroller's face via one-way camera feed.
+   The Scroller cannot see or hear the Optimizer.
+4. The Optimizer picks which videos to show next from a categorized library.
+5. The Optimizer can send interstitial text cards between videos
+   (140 char limit, styled as system messages — no chat UI, no name).
+6. The Scroller's dwell time, scroll velocity, and facial reactions
+   are the Optimizer's signal.
+7. Session continues until the Scroller decides to stop (minimum 5 min,
+   no maximum). Every second they stay is signal.
+8. Session ends → Reveal sequence begins.
+9. Both participants see UMAPs, text card replay, and Optimizer score.
+10. Mutual opt-in to video call. They meet.
+11. Both write independent one-paragraph "field reports."
+
+
+================================================================================
+3. DESIGN PRINCIPLES
+================================================================================
+
+THE SCROLLER EXPERIENCE MUST FEEL LIKE TIKTOK
+  Full-screen vertical video. Swipe up to skip. No chrome, no controls,
+  no branding visible. Native feel, not embedded. The Scroller should
+  forget they're in an experiment and just... scroll. The text cards
+  should feel like an eerily perceptive algorithm, not a person.
+
+THE OPTIMIZER EXPERIENCE MUST FEEL LIKE A GAME
+  Clear score, real-time feedback, visible uncertainty map, a dashboard
+  that rewards strategic thinking. The Optimizer should feel like they're
+  playing a real-time strategy game where the opponent is entropy.
+
+TEXT CARDS ARE THE ALGORITHM'S VOICE
+  Monospace font. No avatar. No name. Styled as system notifications.
+  "We noticed you paused on that one." "You might like this next."
+  "Interesting." The Optimizer is roleplaying as the machine. The reveal
+  — "a human wrote those" — is the emotional payload. This is the
+  Lives of Others moment.
+
+CONSTRAINTS ARE THE GAME
+  Don't give the Optimizer a search bar. Give them categories with
+  pre-curated videos. Force strategic decisions: "they liked cooking,
+  do I show more cooking or test something new?" The constraint space
+  IS the skill expression.
+
+SCHEDULED SESSIONS, NOT REAL-TIME MATCHING
+  At 20-50 beta users, real-time matching is impossible. Sessions run at
+  fixed times: "The Machine runs Thursday at 8pm EST." Event energy.
+  Scarcity. Batch the tiny user base into windows. This is the SpaceX
+  launch / early Clubhouse pattern.
+
+
+================================================================================
+4. TECHNICAL STACK
+================================================================================
+
+FRONTEND
+  Framework:     Next.js 14+ (App Router)
+  Deployment:    Vercel (free tier)
+  Styling:       Tailwind CSS
+  State:         React state + Supabase Realtime subscriptions
+  Video Player:  YouTube IFrame Player API (v1), custom player (v2)
+  UMAP:          umap-js (npm) — runs client-side
+  Charts:        Recharts or D3 for dwell-time visualizations
+
+BACKEND
+  Platform:      Supabase (Auth, Postgres, Realtime, Edge Functions, Storage)
+  Auth:          Google OAuth via Supabase Auth
+  Real-time:     Supabase Realtime channels (one channel per session)
+  Compute:       Supabase Edge Functions (Deno) for score calc, UMAP snapshots
+
+VIDEO FEED (one-way: Scroller camera → Optimizer)
+  v1 approach:   Low-frame-rate snapshots via Supabase Realtime
+                 (base64 JPEG every 2-3 seconds, ~20-50KB per frame)
+                 Simpler than WebRTC, works everywhere, zero infrastructure.
+  v1.5 upgrade:  Daily.co or LiveKit free tier (handles TURN servers)
+  v2 upgrade:    Full WebRTC via simple-peer for real-time video
+
+  Rationale: WebRTC is the flakiest technology in web dev. NAT traversal
+  fails, TURN servers cost money, mobile browsers are inconsistent. For v1,
+  reliability > fidelity. A 2-3 second snapshot cadence is enough for the
+  Optimizer to read reactions.
+
+VIDEO CORPUS (v1)
+  Source:        YouTube IFrame API embeds
+  Quantity:      300 videos across 20 categories
+  Hosting:       YouTube (free, stable API, no storage cost)
+  Metadata:      Supabase Postgres table with category + attribute tags
+
+COST TO RUN v1: $0
+  Vercel free tier: 100GB bandwidth, serverless functions
+  Supabase free tier: 500MB DB, 5GB bandwidth, 50K monthly active users
+  YouTube: free embeds
+
+
+================================================================================
+5. DATA MODEL (Supabase Postgres)
+================================================================================
+
+-- Users
+create table users (
+  id uuid primary key default gen_random_uuid(),
+  google_id text unique not null,
+  display_name text,
+  avatar_url text,
+  email text,
+  created_at timestamptz default now()
+);
+
+-- Session slots (scheduled)
+create table session_slots (
+  id uuid primary key default gen_random_uuid(),
+  starts_at timestamptz not null,
+  optimizer_id uuid references users(id),
+  scroller_id uuid references users(id),
+  status text default 'open'
+    check (status in ('open','matched','lobby','active','reveal','call','completed','abandoned')),
+  created_at timestamptz default now()
+);
+
+-- Video corpus
+create table videos (
+  id uuid primary key default gen_random_uuid(),
+  youtube_id text not null,
+  title text,
+  duration_seconds int,
+
+  -- Rentfrow dimension loadings (0.0 to 1.0)
+  -- How much this video activates each entertainment preference dimension
+  dim_communal float default 0,     -- warmth, family, romance, social bonding
+  dim_aesthetic float default 0,     -- beauty, art, complex, reflective
+  dim_dark float default 0,          -- horror, thriller, edgy, transgressive
+  dim_thrilling float default 0,     -- action, adventure, risk, spectacle
+  dim_cerebral float default 0,      -- documentary, science, informational
+
+  -- Attribute tags (independent of dimension)
+  attr_pace text check (attr_pace in ('slow','medium','fast')),
+  attr_valence text check (attr_valence in ('warm','neutral','dark')),
+  attr_complexity text check (attr_complexity in ('simple','moderate','complex')),
+  attr_social_density text check (attr_social_density in ('solo','small_group','crowd')),
+  attr_novelty text check (attr_novelty in ('familiar','moderate','strange')),
+  attr_production text check (attr_production in ('raw','moderate','polished')),
+
+  -- Diagnosticity: how much dwell-time variance this video produces
+  -- across different personality types (computed from pilot data, updated over time)
+  diag_openness float default 0.5,
+  diag_conscientiousness float default 0.5,
+  diag_extraversion float default 0.5,
+  diag_agreeableness float default 0.5,
+  diag_neuroticism float default 0.5,
+
+  added_at timestamptz default now()
+);
+
+-- Scroll events (the raw behavioral signal)
+create table scroll_events (
+  id bigint generated always as identity primary key,
+  session_id uuid references session_slots(id) not null,
+  video_id uuid references videos(id) not null,
+  dwell_ms int not null,
+  scroll_velocity float,               -- px/sec when scrolled away (fast = disinterest)
+  queued_by text default 'system'       -- 'system' or 'optimizer'
+    check (queued_by in ('system','optimizer')),
+  timestamp_ms bigint not null,
+
+  -- Computed at write time
+  info_gain float,                      -- KL divergence (posterior || prior) from this observation
+  cumulative_info float                 -- running total of info gained in session
+);
+
+-- Optimizer text cards
+create table text_cards (
+  id uuid primary key default gen_random_uuid(),
+  session_id uuid references session_slots(id) not null,
+  content text not null check (char_length(content) <= 140),
+  sent_at_ms bigint not null,           -- session-relative timestamp for replay
+  sent_at timestamptz default now()
+);
+
+-- Session summary (computed at session end)
+create table session_summaries (
+  id uuid primary key default gen_random_uuid(),
+  session_id uuid references session_slots(id) unique not null,
+
+  -- Retention metrics
+  duration_seconds int not null,
+  total_videos_shown int not null,
+  optimizer_videos_shown int not null,
+  system_videos_shown int not null,
+
+  -- Engagement metrics
+  avg_dwell_optimizer_ms float,         -- avg dwell on optimizer-picked videos
+  avg_dwell_system_ms float,            -- avg dwell on system-picked videos
+  engagement_multiplier float,          -- optimizer / system ratio
+
+  -- Information gain metrics
+  total_info_gain float,                -- sum of KL divergence across all videos
+  dimensions_explored int,              -- how many of 5 Rentfrow dims got probed
+  exploration_entropy float,            -- Shannon entropy of category distribution
+
+  -- Final score
+  optimizer_score float not null,       -- retention × engagement × exploration
+
+  -- UMAP data
+  final_feature_vector jsonb not null,  -- the raw preference vector
+  final_umap_coords jsonb not null,     -- {x, y} 2D projection
+
+  -- Reveal outcome
+  scroller_accepted_call boolean,
+  optimizer_accepted_call boolean,
+  call_duration_seconds int,
+
+  created_at timestamptz default now()
+);
+
+-- Field reports (post-reveal)
+create table field_reports (
+  id uuid primary key default gen_random_uuid(),
+  session_id uuid references session_slots(id) not null,
+  user_id uuid references users(id) not null,
+  role text not null check (role in ('optimizer','scroller')),
+  content text not null check (char_length(content) <= 2000),
+  share_consent boolean default false,  -- can we use this for marketing?
+  created_at timestamptz default now()
+);
+
+-- Leaderboard (materialized view, refreshed after each session)
+create materialized view leaderboard as
+select
+  u.id as user_id,
+  u.display_name,
+  count(ss.id) as sessions_played,
+  max(ss.optimizer_score) as best_score,
+  avg(ss.optimizer_score) as avg_score,
+  avg(ss.duration_seconds) as avg_retention_seconds,
+  avg(ss.total_info_gain) as avg_info_gain
+from users u
+join session_summaries ss on ss.session_id in (
+  select id from session_slots where optimizer_id = u.id and status = 'completed'
+)
+group by u.id, u.display_name
+order by max(ss.optimizer_score) desc;
+
+
+================================================================================
+6. VIDEO CORPUS DESIGN
+================================================================================
+
+ORGANIZING PRINCIPLE: PSYCHOLOGICAL DIMENSIONS, NOT TOPICS
+
+Do NOT organize as: "Cooking | Travel | Sports | Comedy | Science"
+DO organize as: Five Rentfrow entertainment preference dimensions,
+cross-cut by six attribute axes.
+
+The Optimizer dashboard shows BOTH:
+  - Dimension labels (what psychological signal the category probes)
+  - Familiar topic names (so the Optimizer can intuitively browse)
+
+DIMENSION → TOPIC MAPPING (starter, refine with data):
+
+  COMMUNAL (warmth, social bonding, conventionality):
+    Family cooking, relationship vlogs, wedding moments, pet rescue,
+    heartwarming compilations, nostalgic music, comfort food, faith content
+
+  AESTHETIC (beauty, complexity, reflection):
+    Cinematography reels, art process videos, architectural tours,
+    classical/jazz performances, nature macro photography, pottery/crafts,
+    foreign cinema clips, slow cinema, gallery walkthroughs
+
+  DARK (edgy, transgressive, intense):
+    True crime snippets, horror short films, extreme body modification,
+    underground music, dark humor, urban exploration (abandoned places),
+    philosophical nihilism content, dystopian sci-fi clips
+
+  THRILLING (action, spectacle, sensation-seeking):
+    Extreme sports (freesoloing, base jumping, surfing), car racing POV,
+    roller coaster POV, military/tactical footage, gaming highlights,
+    parkour, storm chasing, space launches
+
+  CEREBRAL (informational, analytical, cognitive complexity):
+    Science explainers, engineering breakdowns, chess analysis,
+    economics lectures, philosophy talks, math visualizations,
+    historical documentaries, technology deep-dives, debate clips
+
+TARGET: 60 videos per dimension = 300 total
+  Each dimension: ~20 videos that are "pure" (high loading on one dimension)
+  + ~40 that are mixed (cross-loading, e.g., "thrilling + cerebral" = science
+  of extreme sports)
+
+ATTRIBUTE TAGGING:
+  Every video gets tagged on 6 attributes:
+    pace:           slow | medium | fast
+    valence:        warm | neutral | dark
+    complexity:     simple | moderate | complex
+    social_density: solo | small_group | crowd
+    novelty:        familiar | moderate | strange
+    production:     raw | moderate | polished
+
+  These attributes are INDEPENDENT of dimensions. A "cerebral" video can be
+  fast-paced (tech news) or slow (philosophy lecture). The attribute profile
+  determines WITHIN-dimension differentiation.
+
+THE SYSTEM DEFAULT QUEUE:
+  When the Optimizer hasn't queued anything, the system shows videos from a
+  pre-shuffled playlist that samples evenly across all 5 dimensions. This
+  baseline establishes the Scroller's "natural" engagement level against
+  which the Optimizer's picks are compared.
+
+  System queue order for first 10 videos (ensures dimension coverage):
+    1. Cerebral (moderate pace)
+    2. Thrilling (fast pace)
+    3. Aesthetic (slow pace)
+    4. Communal (warm valence)
+    5. Dark (complex)
+    6. Cerebral (fast pace)     — different from #1
+    7. Aesthetic (strange)
+    8. Thrilling (solo)
+    9. Communal (polished)
+    10. Dark (raw)
+
+  After 10: random sampling weighted toward under-explored dimensions.
+
+
+================================================================================
+7. SCORING SYSTEM
+================================================================================
+
+FORMULA:
+  optimizer_score = retention × engagement_multiplier × exploration_multiplier
+
+RETENTION (primary signal):
+  retention = session_duration_seconds (starting from when Optimizer takes control)
+  Minimum threshold: 300 seconds (5 min) before score counts.
+  No maximum. Longer = better.
+  This IS the headline number. "You kept them scrolling for 14:23."
+
+ENGAGEMENT MULTIPLIER (quality signal):
+  engagement_multiplier = avg_dwell_optimizer_picks / avg_dwell_system_picks
+  If Optimizer picks get 2x the dwell of system defaults → 2x multiplier.
+  Clamped to range [0.5, 3.0] to prevent outlier distortion.
+  Prevents gaming via universally popular content — if your picks aren't
+  BETTER than random, your multiplier is ≤1.0.
+
+EXPLORATION MULTIPLIER (breadth signal):
+  exploration_multiplier = 1.0 + (0.2 × dimensions_explored / 5)
+  Ranges from 1.0 (explored 0 dimensions) to 1.2 (explored all 5).
+  A "dimension is explored" when ≥3 videos from that dimension have been shown.
+  Prevents the Optimizer from only showing cooking videos for 15 minutes.
+  Modest multiplier — exploration matters but retention matters more.
+
+INFORMATION GAIN (per-video metric, not in final score but displayed):
+  Each video observation produces a Bayesian update on the Scroller's
+  estimated preference vector. The KL divergence between prior and posterior
+  distributions measures how much we learned.
+
+  In practice for v1, simplified to:
+    info_gain_i = |dwell_i - expected_dwell_for_category| / stdev_category
+  Videos where the Scroller's behavior deviates most from the category average
+  are the most informative.
+
+  Displayed to the Optimizer as a real-time "discovery" indicator.
+  Not in the final score because it rewards showing weird content that
+  everyone skips, which conflicts with retention. It's a DIAGNOSTIC for
+  the Optimizer, not an INCENTIVE.
+
+WHAT THE OPTIMIZER SEES (real-time):
+  - Elapsed session time (prominent, large)
+  - Current engagement trend (last 5 videos: rising / falling / flat)
+  - Dwell time per video with comparison to session average
+  - Dimension exploration heatmap (bright = unexplored, dark = mapped)
+  - "Danger zone" flash when dwell times drop below session average
+    for 3+ consecutive videos (they're losing interest, change strategy)
+  - Running score estimate
+
+WHAT THE SCROLLER SEES:
+  Nothing about scoring. No timer. No indicators. They just scroll.
+  The moment they want to stop, they stop. That IS the signal.
+
+LEADERBOARD:
+  Ranks Optimizers by best session score.
+  Shows: rank, display name, best score, sessions played, avg retention.
+  Updated after each completed session.
+
+
+================================================================================
+8. SESSION FLOW (STATE MACHINE)
+================================================================================
+
+  OPEN → MATCHED → LOBBY → COUNTDOWN → ACTIVE → REVEAL → CALL → DEBRIEF → COMPLETED
+    │        │        │         │          │         │       │        │
+    │        │        │         │          │         │       │        └─ Field reports
+    │        │        │         │          │         │       └─ Mutual video call
+    │        │        │         │          │         └─ UMAP + text card replay + score
+    │        │        │         │          └─ Scrolling session (5 min minimum, no max)
+    │        │        │         └─ 3-2-1 synchronized start
+    │        │        └─ Both joined, camera/mic check
+    │        └─ Two users paired (optimizer + scroller)
+    └─ Time slot created, waiting for signups
+
+State transitions via Supabase Realtime broadcast on session channel.
+
+ACTIVE PHASE DETAIL:
+  1. First 10 videos come from system default queue (baseline measurement)
+  2. Optimizer can start queuing videos at any time (but system fills gaps)
+  3. If Optimizer queue is empty, system auto-fills from under-explored dimensions
+  4. Session minimum: 5 minutes (before this, no exit option shown to Scroller)
+  5. After 5 minutes: subtle "Done for now" button appears in Scroller UI
+  6. Scroller taps "Done" → session ends → state transitions to REVEAL
+  7. If Scroller closes browser/tab → detected via Realtime presence →
+     treated as session end if past 5-min minimum, otherwise → ABANDONED
+
+TIMEOUTS:
+  LOBBY: 5 min max wait. If both don't join → ABANDONED.
+  ACTIVE: No timeout. Session runs until Scroller stops.
+  REVEAL: 10 min max. If not acknowledged → auto-advance to CALL opt-in.
+  CALL: 30 min max. Auto-end.
+  DEBRIEF: 24 hours to submit field report (optional but prompted).
+
+
+================================================================================
+9. SCROLLER CLIENT
+================================================================================
+
+LAYOUT:
+  Full-screen. Portrait orientation. Black background.
+  One video at a time (like TikTok). Swipe up = next video.
+  No visible UI chrome during video playback.
+
+VIDEO DISPLAY:
+  YouTube IFrame embedded with:
+    controls: 0
+    modestbranding: 1
+    showinfo: 0
+    rel: 0
+    playsinline: 1
+    autoplay: 1
+  Custom overlay hides remaining YouTube branding.
+  Video fills viewport with object-fit: cover.
+
+TEXT CARDS (INTERSTITIALS):
+  Slide in from bottom between videos. Hold for 3 seconds. Fade out.
+  Styling:
+    Background: rgba(0, 0, 0, 0.85)
+    Font: monospace, 16px, white, centered
+    No avatar. No name. No "from" indicator.
+    Examples:
+      "We thought you might like this."
+      "You paused longer on that one."
+      "Interesting choice."
+      "What if we tried something different?"
+
+  The Scroller should feel like an eerily perceptive algorithm is
+  watching them. They should NOT feel like they're in a chat.
+
+CAMERA:
+  getUserMedia({ video: { facingMode: 'user', width: 640, height: 480 } })
+  Camera preview: small pip in top-right corner (Scroller can see themselves).
+  Stream sent to Optimizer via:
+    v1: Canvas capture → JPEG → base64 → Supabase Realtime (every 2-3 sec)
+    v2: WebRTC one-way stream
+
+SCROLL TRACKING:
+  On each video:
+    - Record: video_id, start_time_ms, end_time_ms
+    - Calculate: dwell_ms = end - start
+    - Measure: scroll velocity (how fast they swiped away)
+    - Send to Supabase: insert into scroll_events
+    - Broadcast via Realtime channel (Optimizer gets instant update)
+
+EXIT:
+  After 5 minutes: "Done for now" button fades in (bottom center, subtle).
+  Single tap → confirmation: "End your session?" → Yes / Keep scrolling
+  The button should not be attention-grabbing. We don't WANT them to leave.
+
+WHAT THE SCROLLER DOES NOT SEE:
+  - Timer / clock
+  - Score
+  - Category names
+  - Any indication that a human is watching them
+  - The Optimizer's existence
+
+
+================================================================================
+10. OPTIMIZER CLIENT
+================================================================================
+
+LAYOUT (desktop-optimized, this is a dashboard):
+
+  ┌──────────────────────────────────────────────────────────────────┐
+  │  THE MACHINE — OPTIMIZER                    Session: 12:34  ▲▲  │
+  ├───────────────────────┬──────────────────────────────────────────┤
+  │                       │                                          │
+  │   ┌─────────────────┐ │  DIMENSION MAP                           │
+  │   │                 │ │  ┌──────────────────────────────────────┐│
+  │   │  SCROLLER FACE  │ │  │ Communal   [████████░░] 80%  mapped ││
+  │   │  (live feed)    │ │  │ Aesthetic   [██████░░░░] 60%         ││
+  │   │                 │ │  │ Dark        [██░░░░░░░░] 20%  ← TRY ││
+  │   │                 │ │  │ Thrilling   [████░░░░░░] 40%         ││
+  │   │                 │ │  │ Cerebral    [░░░░░░░░░░]  0%  ← TRY ││
+  │   └─────────────────┘ │  └──────────────────────────────────────┘│
+  │                       │                                          │
+  │   Dwell: ████████░░   │  VIDEO PICKER                            │
+  │   8.2s (avg: 5.1s) ▲  │  ┌──────────────────────────────────────┐│
+  │                       │  │ [Communal ▼]                         ││
+  │   Last 5: ▁▃▅▇▅      │  │                                      ││
+  │   Trend: ENGAGED      │  │  ┌──────┐ ┌──────┐ ┌──────┐        ││
+  │                       │  │  │thumb │ │thumb │ │thumb │ ...     ││
+  │   ─────────────────── │  │  │video1│ │video2│ │video3│         ││
+  │                       │  │  └──────┘ └──────┘ └──────┘         ││
+  │   TEXT CARD COMPOSER  │  │                                      ││
+  │   ┌─────────────────┐ │  │  [QUEUE SELECTED] [QUEUE RANDOM]    ││
+  │   │                 │ │  └──────────────────────────────────────┘│
+  │   │  140 chars      │ │                                          │
+  │   └─────────────────┘ │  LIVE UMAP          SCORE                │
+  │   [SEND CARD]         │  ┌────────────┐     ┌──────────────────┐│
+  │                       │  │    · *      │     │ Retention: 734s  ││
+  │   Card history:       │  │  ·    ·    │     │ Engagement: 1.6x ││
+  │   1. "we thought..."  │  │ ●→    ·   │     │ Exploration: 3/5 ││
+  │   2. "interesting"    │  │     ·   ·  │     │ Est. Score: 1174 ││
+  │                       │  └────────────┘     └──────────────────┘│
+  └───────────────────────┴──────────────────────────────────────────┘
+
+SCROLLER FACE PANEL (left):
+  - Live camera feed from Scroller (snapshot or WebRTC)
+  - Current dwell time bar (fills up as they watch current video)
+  - Comparison to session average (arrow up/down)
+  - Sparkline of last 5 dwell times
+  - Trend indicator: ENGAGED / NEUTRAL / LOSING THEM
+    (computed from dwell trend: 3+ declining → "LOSING THEM" in red)
+
+DIMENSION MAP (top right):
+  - Five Rentfrow dimensions, each with a progress bar
+  - Progress = number of videos shown from this dimension / minimum threshold
+  - "← TRY" indicator on dimensions with 0-1 videos shown
+  - Color coding: bright = unexplored, dim = well-mapped
+  - This IS the "uncertainty heatmap" — guides the Optimizer toward gaps
+
+VIDEO PICKER (middle right):
+  - Dropdown to select dimension (Communal, Aesthetic, Dark, Thrilling, Cerebral)
+  - Grid of video thumbnails from selected dimension
+  - Each thumbnail shows: title snippet, duration, previous-session avg dwell
+  - Click to select, then QUEUE to push to Scroller's feed
+  - QUEUE RANDOM: picks a random video from the least-explored dimension
+
+TEXT CARD COMPOSER (left below face):
+  - Text input, 140 char limit
+  - Character count
+  - SEND button
+  - History of sent cards (scrollable, timestamped)
+
+LIVE UMAP (bottom right):
+  - 2D scatter plot
+  - Scroller's position updates every time a new video is watched
+  - Dot color changes based on last dwell time (green = long, red = skip)
+  - Trail shows trajectory through preference space
+
+SCORE PANEL (bottom right):
+  - Retention (seconds, updating live)
+  - Engagement multiplier (current value)
+  - Dimensions explored (N/5)
+  - Estimated total score (updating)
+
+ALERTS:
+  - DANGER ZONE: screen border flashes red when Scroller dwell drops
+    below average for 3+ consecutive videos
+  - "Scroller has been watching for [X] — personal best!" milestones
+
+
+================================================================================
+11. THE REVEAL SEQUENCE
+================================================================================
+
+The reveal is the emotional climax. Design it as a SEQUENCE, not a dump.
+
+STEP 1: UMAP REVEAL (Scroller sees this first)
+  Full-screen animation. The Scroller's UMAP builds up, one dot at a time,
+  replaying the session in fast-forward.
+  Label: "This is your taste fingerprint."
+  Top 3 dimensions labeled on the UMAP.
+  Hold for 10 seconds. Let it sink in.
+
+STEP 2: TEXT CARD REPLAY
+  The text cards the Optimizer sent are replayed one by one, in order,
+  with timestamps relative to the session.
+  Each card slides in with its original timing feel (a few seconds apart).
+  The Scroller re-reads the "algorithm's" messages as a complete narrative.
+  At the end: "These messages were written by a real person."
+  Hold. Let the recontextualization land.
+
+STEP 3: OPTIMIZER SCORE
+  "Your Optimizer kept you scrolling for 14 minutes and 23 seconds."
+  "They explored 4 of 5 personality dimensions."
+  "Their picks held your attention 1.6x longer than random videos."
+  "Score: 1,174"
+  Compare to leaderboard: "Top 15% of all Optimizers."
+
+STEP 4: MUTUAL OPT-IN
+  "The person who was watching you wants to meet you."
+  "Would you like to meet them?"
+  [Yes, let's meet] [Not this time]
+
+  Both must opt in. If either says no → graceful end.
+  "Thanks for playing The Machine. Your taste fingerprint has been saved."
+
+STEP 5: VIDEO CALL
+  If both opt in → peer-to-peer video call opens.
+  Both cameras on. Both can see and hear each other.
+  First screen: their two UMAPs side by side.
+  No time limit shown. Auto-end after 30 minutes.
+
+STEP 6: FIELD REPORTS (asynchronous, within 24 hours)
+  Both get prompted (email or push):
+  "Write a short paragraph about your Machine experience."
+  Prompts:
+    - What surprised you?
+    - What did the Optimizer get right or wrong?
+    - What did the reveal feel like?
+  Optional: "May we share this? (anonymized)"
+  This serves: (1) research data, (2) marketing content, (3) memory encoding.
+
+
+================================================================================
+12. MATCHING & SCHEDULING
+================================================================================
+
+v1: SIMPLE SCHEDULED SLOTS
+
+  Admin creates time slots (e.g., every Thursday 8pm EST, every Sunday 3pm EST).
+  Users sign up for a slot and indicate role preference:
+    - "I want to be the Optimizer"
+    - "I want to be the Scroller"
+    - "Either"
+
+  Matching algorithm (Edge Function, runs 15 min before slot):
+    1. Pair Optimizer-preference with Scroller-preference users first.
+    2. Assign "Either" users to fill gaps.
+    3. If odd number, one "Either" user gets waitlisted.
+    4. If no valid pairs, cancel slot and notify.
+
+  Users get email/push 1 hour before: "Your Machine session starts at 8pm."
+  Users get notification 15 min before: "Your partner has been assigned. Join now."
+
+v2: ON-DEMAND WITH QUEUE
+  Once user base > 100 active:
+  - "Join The Machine" → enters queue
+  - Matched when a compatible partner is available
+  - Expected wait time displayed
+  - Still shows role preference
+
+
+================================================================================
+13. SHAREABLE ARTIFACTS
+================================================================================
+
+End-of-session generates a SINGLE IMAGE (1080x1920, Instagram Story format):
+
+  ┌──────────────────────────┐
+  │     THE MACHINE          │
+  │     experiments.dating   │
+  │                          │
+  │   [UMAP VISUALIZATION]  │
+  │   Your taste fingerprint │
+  │                          │
+  │   Top dimensions:        │
+  │   1. Aesthetic (87%)     │
+  │   2. Cerebral (72%)      │
+  │   3. Dark (45%)          │
+  │                          │
+  │   "We thought you might  │
+  │    like this."           │
+  │   "You paused longer     │
+  │    on that one."         │
+  │   "What are you hiding?" │
+  │                          │
+  │   Optimizer score: 1,174 │
+  │   14:23 retention        │
+  │                          │
+  │   [QR CODE → link]       │
+  └──────────────────────────┘
+
+Generated server-side (Edge Function + canvas/sharp).
+Delivered as downloadable PNG + share link.
+Open Graph meta tags on share link for rich previews.
+
+
+================================================================================
+14. INFRASTRUCTURE & DEPLOYMENT
+================================================================================
+
+ENVIRONMENTS:
+  Production:  vercel.com (auto-deploy from main branch)
+  Staging:     Vercel preview deployments (every PR)
+  Database:    Supabase project (one for prod, one for dev)
+
+DOMAIN:
+  experiments.dating (primary)
+  the-machine.experiments.dating (direct link to The Machine)
+
+MONITORING:
+  Vercel Analytics (free): page views, web vitals
+  Supabase Dashboard: DB metrics, Realtime connections
+  Sentry (free tier): error tracking
+
+CI/CD:
+  GitHub → Vercel auto-deploy
+  Branch protection on main
+  Preview deploys for PRs
+
+ENVIRONMENT VARIABLES:
+  NEXT_PUBLIC_SUPABASE_URL
+  NEXT_PUBLIC_SUPABASE_ANON_KEY
+  SUPABASE_SERVICE_ROLE_KEY (server-side only)
+  NEXT_PUBLIC_YOUTUBE_API_KEY
+
+
+================================================================================
+15. BUILD SEQUENCE (14 DAYS)
+================================================================================
+
+DAYS 1-2: FOUNDATION
+  □ Create Next.js project with App Router
+  □ Set up Supabase project (auth, database)
+  □ Deploy to Vercel (verify CI/CD pipeline works)
+  □ Google OAuth flow (sign in, sign out, session persistence)
+  □ Run database migrations (all tables from Section 5)
+  □ Supabase Realtime: create session channel, verify pub/sub works
+  □ Basic layout: landing page, auth gate, session page shells
+
+DAYS 3-4: VIDEO CORPUS + SCROLLER VIEW
+  □ Curate 300 YouTube videos (60 per Rentfrow dimension)
+  □ Tag each video with dimension loadings + attributes (spreadsheet → SQL insert)
+  □ Build Scroller UI:
+    - Full-screen vertical video player (YouTube IFrame API)
+    - Swipe-up gesture detection (touch + scroll)
+    - Auto-advance to next video on swipe
+    - Dwell time tracking (start/stop timestamps per video)
+  □ Text card display (interstitial, slides in between videos)
+  □ Camera capture (getUserMedia)
+  □ Camera snapshot pipeline: canvas → JPEG → base64 → Realtime broadcast
+  □ Scroll event logging: dwell_ms, scroll_velocity → Supabase insert
+  □ Broadcast scroll events on Realtime channel
+
+DAYS 5-7: OPTIMIZER VIEW
+  □ Receive camera snapshots from Realtime → display as updating image
+  □ Dwell time indicator (current video, comparison to average)
+  □ Sparkline of last N dwell times
+  □ Trend indicator logic (ENGAGED / NEUTRAL / LOSING THEM)
+  □ Dimension exploration map (5 bars, progress tracking)
+  □ Video picker:
+    - Dimension selector dropdown
+    - Thumbnail grid for selected dimension
+    - Queue button → pushes video_id to Realtime channel
+    - Scroller client receives queued video and plays it next
+  □ Text card composer:
+    - Input field (140 char limit)
+    - Send button → broadcasts to Realtime → Scroller displays card
+    - Card history display
+  □ Live UMAP:
+    - umap-js integration
+    - Input: accumulated dwell-time vector (one value per dimension)
+    - Recompute 2D projection every time a new scroll event arrives
+    - Render with canvas or SVG
+  □ Danger zone alert (3+ declining dwells → red border flash)
+
+DAYS 8-9: SESSION MANAGEMENT
+  □ Session scheduling page:
+    - List available time slots
+    - Sign up with role preference (Optimizer / Scroller / Either)
+  □ Matching Edge Function:
+    - Runs 15 min before slot
+    - Pairs users by role preference
+    - Updates session_slots with assigned users
+    - Sends notification (email via Supabase or in-app)
+  □ Lobby:
+    - Both users join session URL
+    - Camera/mic permission check
+    - "Waiting for partner" state
+    - Countdown when both present (3-2-1)
+  □ Session timer display (Optimizer only)
+  □ "Done for now" button (Scroller, appears after 5 min)
+  □ Session end logic:
+    - Scroller taps Done → broadcast END event
+    - Compute session_summary (all metrics from Section 7)
+    - Insert into session_summaries table
+    - Transition to REVEAL state
+
+DAYS 10-11: THE REVEAL + CALL
+  □ UMAP animation (dots appear one by one, replaying session)
+  □ Dimension labels on final UMAP
+  □ Text card replay (one by one, timed)
+  □ "These messages were written by a real person" moment
+  □ Optimizer score display (with leaderboard comparison)
+  □ Mutual opt-in screen ("Would you like to meet?")
+  □ If both yes: open video call
+    - v1: Daily.co embed (simplest, handles all WebRTC complexity)
+    - Fallback: link to Google Meet / Zoom generated URL
+  □ Auto-end call after 30 minutes
+  □ Field report prompt (text area, submit button, share consent toggle)
+
+DAYS 12-13: POLISH + LANDING PAGE
+  □ Landing page:
+    - What is The Machine (concise, visual)
+    - How it works (3-step visual)
+    - Sign up for next session
+    - Visual identity: sacred geometry + CRT + experimental aesthetic
+  □ Shareable artifact generation:
+    - Edge Function: takes session_summary → generates PNG
+    - Open Graph meta tags on share URL
+    - Download button on reveal screen
+  □ Leaderboard page
+  □ Mobile responsiveness:
+    - Scroller: MUST work perfectly on mobile (primary use case)
+    - Optimizer: desktop-optimized, mobile-acceptable
+  □ Error handling:
+    - Camera permission denied → graceful messaging
+    - Partner disconnect → "Your partner left" + partial scoring
+    - Network issues → reconnection logic with Realtime
+  □ Loading states, transitions, micro-animations
+
+DAY 14: TEST + DEPLOY
+  □ End-to-end test with 2 real humans (you + Julie, or you + friend)
+  □ Fix everything that breaks
+  □ Performance pass: lighthouse score, bundle size
+  □ Security pass: RLS policies on all Supabase tables
+  □ Deploy to production
+  □ Create first session slots
+  □ Invite first 10 beta testers from Love Symposium network
+
+
+================================================================================
+16. RISK REGISTER
+================================================================================
+
+RISK: Nobody shows up to scheduled sessions.
+IMPACT: Critical — the product literally can't function.
+MITIGATION: Batch scheduling. Thursday + Sunday only. Recruit 20+ for each
+  slot via personal outreach to Love Symposium attendees. Over-recruit by 2x
+  to handle no-shows. First 5 sessions, you personally play Optimizer.
+FALLBACK: If scheduling doesn't work, pivot to recorded mode — Scroller
+  records a session, Optimizer watches asynchronously and submits their video
+  queue as a "playlist prediction." Less magical, but works solo.
+
+RISK: The video corpus doesn't differentiate personalities.
+IMPACT: High — scoring is meaningless if everyone watches the same way.
+MITIGATION: Pilot test corpus with 5-10 diverse testers before launch.
+  Check for between-subject dwell-time variance. If all videos get similar
+  dwell times, the corpus needs more polarizing content. Replace bland
+  universally-appealing videos with niche/divisive content.
+VALIDATION: For each video, compute coefficient of variation (CV) of dwell
+  times across pilot testers. Target: CV > 0.3 for at least 60% of videos.
+
+RISK: WebRTC / camera feed fails on certain devices/browsers.
+IMPACT: Medium — degrades experience but doesn't break core loop.
+MITIGATION: v1 uses snapshot approach (no WebRTC). Camera fallback:
+  if getUserMedia fails, Optimizer plays without face feed (still has
+  dwell time data). Test on: Chrome/Safari desktop, Chrome/Safari mobile.
+
+RISK: YouTube embeds get rate-limited or blocked.
+IMPACT: Medium — breaks video playback.
+MITIGATION: YouTube IFrame API is designed for embedding; rate limits are
+  generous. Use youtube-nocookie.com domain for privacy-enhanced embedding.
+  If YouTube becomes hostile, switch to self-hosted video (Cloudflare Stream
+  free tier: 100 min storage, 10K min streaming/month).
+
+RISK: Optimizer trolls or doesn't try.
+IMPACT: High — ruins Scroller's experience.
+MITIGATION: (1) Google OAuth = real identity, not anonymous. (2) Leaderboard
+  = social pressure to perform. (3) In-person reveal = accountability.
+  (4) First sessions: handpick Optimizers from your network. (5) Post-session
+  Scroller can flag bad Optimizer behavior → ban from future sessions.
+
+RISK: The reveal doesn't land emotionally.
+IMPACT: Medium — the product works but isn't memorable/shareable.
+MITIGATION: The reveal sequence design (Section 11) is specifically built
+  to create an emotional arc. Test it. If the replay + "a human wrote these"
+  moment doesn't create a reaction in testing, redesign the sequence timing,
+  add music/sound design, or change the text card styling to heighten contrast.
+
+RISK: Scope creep. You build for 14 days and ship on day 45.
+IMPACT: Critical — "slow is fake."
+MITIGATION: This document IS the scope. If it's not in this document, it's
+  not in v1. The Living Page, Agent-Mediated Dating, Agent-to-Agent
+  interactions, the full visual identity system — all v2+. Ship The Machine
+  first. Validate the core loop. Then build everything else.
+
+
+================================================================================
+17. POST-v1 ROADMAP
+================================================================================
+
+v1.5 (Weeks 3-4):
+  - Replace YouTube embeds with AI-generated psychometric stimuli
+    (start with Kling AI, $50-200 for 300 clips)
+  - Replace snapshot camera with Daily.co WebRTC
+  - Add audio from Scroller (Optimizer can hear reactions)
+  - Refine diagnosticity scores based on v1 dwell-time data
+  - Add email notifications for upcoming sessions
+
+v2 (Month 2):
+  - The Living Page (generative AI landing experience)
+  - Agent-Mediated Dating (MCP integration)
+  - Full visual identity (sacred geometry, CRT aesthetic)
+  - On-demand matching (queue-based, not scheduled)
+  - Extended UMAP: compare your fingerprint across sessions
+  - Paid model: $5 per Machine session or $9/month subscription
+
+v3 (Month 3+):
+  - Additional experiments (Text Autopsy, How Predictable Are You, etc.)
+  - Agent-to-Agent privacy protocol
+  - NeurIPS submission dataset preparation
+  - Mobile app (React Native or Expo)
+  - Bumble/Hinge UMAP overlay feature
+
+
+================================================================================
+18. OPEN QUESTIONS (decisions needed before Day 1)
+================================================================================
+
+1. ROLE SELECTION: Should users choose their role, or should it be random?
+   Choosing allows self-selection (people who want to be Optimizers are
+   more engaged). Random creates surprise and forces people out of comfort
+   zones. Recommendation: let them choose for v1.
+
+2. SESSION LENGTH MINIMUM: 5 minutes was proposed. Is that enough for the
+   Optimizer to learn anything meaningful? Research says 20 seconds of
+   browsing predicts personality, so 5 minutes is plenty of data. But is
+   it enough for the EMOTIONAL arc to develop? The Optimizer needs time
+   to care. Maybe 8 minutes minimum.
+
+3. REPEAT SESSIONS: Can the same two people be matched again? If yes,
+   does the Optimizer's knowledge carry over? This creates interesting
+   dynamics (the Optimizer "knows" them now) but complicates scoring.
+   Recommendation: no repeats in v1. Fresh pairs only.
+
+4. OPTIMIZER AUDIO: Should the Optimizer be able to hear the Scroller?
+   Audio is richer signal than video alone (laughter, sighs, verbal
+   reactions). But it's more technically complex and creates privacy
+   concerns. Recommendation: yes, add in v1.5 once camera feed is stable.
+
+5. GROUP SESSIONS: Multiple Scrollers, one Optimizer? Or multiple
+   Optimizers competing to serve the same Scroller? Both are interesting
+   game modes but add complexity. Recommendation: v2.
+
+6. CONTENT MODERATION: What if someone's camera shows inappropriate
+   content? Google OAuth provides identity but not prevention.
+   Recommendation: manual review for v1 (you know all beta testers).
+   Add automated moderation in v2.
+
+7. DATA RETENTION: How long do you keep scroll_events and camera snapshots?
+   Research value says forever. Privacy says delete after analysis.
+   Recommendation: keep scroll_events indefinitely (they're anonymous
+   behavioral data). Delete camera snapshots after session ends.
+
+
+================================================================================
+END OF ENGINEERING PLAN
+================================================================================
